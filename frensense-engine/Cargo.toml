@@ -39,7 +39,7 @@ oxc_span = { version = "0.143", optional = true }
 oxc_syntax = { version = "0.143", optional = true }
 ra_ap_base_db = { version = "0.0.345", optional = true }
 ra_ap_hir = { version = "0.0.345", optional = true }
-ra_ap_ide_db = { version = "0.0.345", optional = true }
+ra_ap_ide_db = { version = "0.0.350", optional = true }
 ra_ap_paths = { version = "0.0.345", optional = true }
 ra_ap_project_model = { version = "0.0.345", optional = true }
 ra_ap_span = { version = "0.0.345", optional = true }
