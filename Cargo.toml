@@ -59,7 +59,7 @@ petgraph = "0.6"
 pathdiff = "0.2"
 rustc-hash = "1.1"
 blake3 = "1.5"
-toml = "0.8"
+toml = "1.1"
 
 [features]
 default = ["rust", "typescript", "fingerprinting", "temporal"]
