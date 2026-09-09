@@ -58,7 +58,7 @@ jobs:
         run: cargo clippy --all-features -- 
 
       - name: Install MSRV 1.95
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.120.0
       - name: cargo check with MSRV
         run: cargo check --all-features
       - name: Restore stable toolchain
