@@ -134,26 +134,55 @@ impl SymbolRegistry {
     pub fn add_call_edge(&mut self, file_path: &Path, src_name: &str, target_name: &str) {
         let file_str = file_path.display().to_string();
         let src_symbols = self.find(src_name);
-        let target_symbols = self.find(target_name);
+
+        let mut t_name = target_name;
+        let mut module_hint = None;
+
+        if let Some(idx) = target_name.rfind('.') {
+            module_hint = Some(&target_name[..idx]);
+            t_name = &target_name[idx + 1..];
+        }
+
+        let mut target_symbols = self.find(t_name);
+        if target_symbols.is_empty() && module_hint.is_some() {
+            target_symbols = self.find(target_name);
+        }
 
         let src_node_id = src_symbols
             .iter()
             .find(|s| s.file_path == file_str)
             .and_then(|s| self.graph.find_node(&s.name, &s.file_path, s.line));
 
-        let target_node_id =
-            if let Some(local) = target_symbols.iter().find(|s| s.file_path == file_str) {
-                self.graph
-                    .find_node(&local.name, &local.file_path, local.line)
+        let mut target_node_id = None;
+
+        if let Some(local) = target_symbols.iter().find(|s| s.file_path == file_str) {
+            target_node_id = self
+                .graph
+                .find_node(&local.name, &local.file_path, local.line);
+        } else {
+            let mut candidates = target_symbols.clone();
+            if let Some(hint) = module_hint {
+                let hint_clean = hint.to_lowercase().replace("-", "").replace("_", "");
+                candidates.retain(|s| {
+                    let path_clean = s.file_path.to_lowercase().replace("-", "").replace("_", "");
+                    path_clean.contains(&hint_clean)
+                });
+            }
+
+            if candidates.len() == 1 {
+                target_node_id = self.graph.find_node(
+                    &candidates[0].name,
+                    &candidates[0].file_path,
+                    candidates[0].line,
+                );
             } else if target_symbols.len() == 1 {
-                self.graph.find_node(
+                target_node_id = self.graph.find_node(
                     &target_symbols[0].name,
                     &target_symbols[0].file_path,
                     target_symbols[0].line,
-                )
-            } else {
-                None
-            };
+                );
+            }
+        }
 
         if let (Some(s_id), Some(t_id)) = (src_node_id, target_node_id) {
             self.graph.add_edge(s_id, t_id, EdgeKind::Calls);

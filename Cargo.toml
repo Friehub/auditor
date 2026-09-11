@@ -1,10 +1,10 @@
 [workspace]
-members = ["frensense-engine", "frensense-runtime"]
+members = ["frensense-bundler","frensense-engine", "frensense-frc", "frensense-lang", "frensense-providers", "frensense-runtime"]
 resolver = "2"
 
 [package]
 name = "frensense"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Friehub Developers"]
 edition = "2024"
 description = "Frensense: High-performance semantic diagnostic engine for Rust, TypeScript, and Solidity."
@@ -29,15 +29,11 @@ name = "frensense-mcp"
 path = "src/bin/frensense-mcp.rs"
 
 [[bin]]
-name = "build-corpus-bundle"
-path = "src/bin/build-corpus-bundle.rs"
-
-[[bin]]
 name = "corpus-quality"
 path = "src/bin/corpus-quality.rs"
 
 [dependencies]
-frensense-engine = { path = "frensense-engine", version = "0.5.0", features = ["full-analysis"] }
+frensense-engine = { path = "frensense-engine", version = "0.6.0", features = ["full-analysis"] }
 tree-sitter = "0.23"
 tree-sitter-rust = { version = "0.23", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
@@ -60,6 +56,8 @@ pathdiff = "0.2"
 rustc-hash = "1.1"
 blake3 = "1.5"
 toml = "0.8"
+frensense-bundler = { version = "0.6.0", path = "frensense-bundler" }
+frensense-providers = { version = "0.6.0", path = "frensense-providers" }
 
 [features]
 default = ["rust", "typescript", "fingerprinting", "temporal"]
@@ -69,7 +67,7 @@ python = ["frensense-engine/python", "dep:tree-sitter-python"]
 html = ["frensense-engine/html", "dep:tree-sitter-html"]
 fingerprinting = ["frensense-engine/serialize"]
 temporal = []
-rust-hir = ["frensense-engine/rust-hir"]
+rust-hir = ["frensense-providers/rust-hir"]
 
 [dev-dependencies]
 tempfile = "3"

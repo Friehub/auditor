@@ -90,7 +90,7 @@ const CHECKS: &[MiddlewareCheck] = &[
     },
 ];
 
-pub fn find(snap: &FileSnapshot, ctx: &FindingContext<'_>) -> Vec<Advisory> {
+pub fn find(snap: &FileSnapshot, _ctx: &FindingContext<'_>) -> Vec<Advisory> {
     let fname = snap.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let source = &snap.content;
 

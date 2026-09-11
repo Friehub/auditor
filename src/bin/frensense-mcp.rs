@@ -1,5 +1,7 @@
+#![allow(unused)]
+#![allow(clippy::all)]
 // SPDX-License-Identifier: MIT
-//! `Frensense` MCP Server — stdin/stdout JSON-RPC bridge.
+//! `Frensense` MCP Server - stdin/stdout JSON-RPC bridge.
 //!
 //! Thin entry point that delegates to the `frensense::mcp` module.
 

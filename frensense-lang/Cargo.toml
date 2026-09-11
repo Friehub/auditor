@@ -1,0 +1,46 @@
+[package]
+name        = "frensense-lang"
+version     = "0.6.0"
+edition     = "2021"
+description = "Per-language AST specs for the frensense engine — eliminates all hardcoded node-kind strings"
+license     = "MIT"
+
+# ── Tree-sitter grammars are optional so the crate compiles even when only a
+#    subset of languages is needed. Enable every language you want to scan. ──
+[features]
+default = ["typescript", "javascript", "go", "python", "rust-grammar", "c-grammar"]
+
+typescript   = ["dep:tree-sitter-typescript"]
+javascript   = ["dep:tree-sitter-javascript"]
+go           = ["dep:tree-sitter-go"]
+python       = ["dep:tree-sitter-python"]
+rust-grammar = ["dep:tree-sitter-rust"]
+c-grammar    = ["dep:tree-sitter-c"]
+
+[dependencies]
+tree-sitter = "0.23"
+rustc-hash  = "1"
+
+[dependencies.tree-sitter-typescript]
+version  = "0.23"
+optional = true
+
+[dependencies.tree-sitter-javascript]
+version  = "0.23"
+optional = true
+
+[dependencies.tree-sitter-go]
+version  = "0.23"
+optional = true
+
+[dependencies.tree-sitter-python]
+version  = "0.23"
+optional = true
+
+[dependencies.tree-sitter-rust]
+version  = "0.23"
+optional = true
+
+[dependencies.tree-sitter-c]
+version  = "0.23"
+optional = true

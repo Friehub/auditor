@@ -60,7 +60,7 @@ impl SessionManager {
             .await
             .map_err(|e| format!("Login page GET failed: {e}"))?;
 
-        let status = get_resp.status().as_u16();
+        let _status = get_resp.status().as_u16();
         let headers = get_resp.headers().clone();
         let body = get_resp
             .text()

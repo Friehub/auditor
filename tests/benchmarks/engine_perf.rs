@@ -2,8 +2,8 @@
 //! Frensense Engine Benchmarks
 //!
 //! Concrete, realistic benchmarks across every major engine subsystem.
-//! Each benchmark uses code that resembles actual production patterns —
-//! not synthetic repetition — so results reflect real-world performance.
+//! Each benchmark uses code that resembles actual production patterns -
+//! not synthetic repetition - so results reflect real-world performance.
 //!
 //! Run locally:
 //!   cargo bench --features full
@@ -37,7 +37,7 @@ fn apply_quick_mode(group: &mut criterion::BenchmarkGroup<'_, criterion::measure
 }
 
 // ── Realistic source fixtures ─────────────────────────────────────────────────
-// These represent actual patterns a developer would write — including patterns
+// These represent actual patterns a developer would write - including patterns
 // that trigger rules, patterns that don't, and mixed realistic code.
 
 const RUST_SERVICE_CLEAN: &str = r##"
@@ -90,8 +90,8 @@ const RUST_SERVICE_WITH_VIOLATIONS: &str = r#"
 use std::fs;
 
 pub async fn process_payment(amount: f64, user_id: &str) -> Result<(), String> {
-    // f64 for money — RUST_F64_FOR_MONEY
-    // blocking IO in async — RUST_BLOCKING_IN_ASYNC
+    // f64 for money - RUST_F64_FOR_MONEY
+    // blocking IO in async - RUST_BLOCKING_IN_ASYNC
     let log = fs::read_to_string("/var/log/payments.log").unwrap();
     println!("Processing: {}", log);  // RUST_STD_OUTPUT
 
@@ -109,7 +109,7 @@ pub async fn process_payment(amount: f64, user_id: &str) -> Result<(), String> {
 }
 
 fn validate_input(input: &str) -> bool {
-    // RUST_CSA_VALIDATE_UNCONDITIONAL — no rejection path
+    // RUST_CSA_VALIDATE_UNCONDITIONAL - no rejection path
     true
 }
 "#;
@@ -154,13 +154,13 @@ const TS_SERVICE_WITH_VIOLATIONS: &str = r"
 import { prisma } from '../db';
 
 export const badOrderService = {
-  // publicProcedure mutation — TRPC_PUBLIC_MUTATION
+  // publicProcedure mutation - TRPC_PUBLIC_MUTATION
   deleteOrder: publicProcedure
     .mutation(async ({ ctx, input }) => {
-      // No ownership scope — TRPC_PRISMA_NO_WHERE_SCOPE
+      // No ownership scope - TRPC_PRISMA_NO_WHERE_SCOPE
       await prisma.order.delete({ where: { id: input.orderId } });
 
-      // Event inside transaction — TS_EVENT_INSIDE_TRANSACTION
+      // Event inside transaction - TS_EVENT_INSIDE_TRANSACTION
       await prisma.$transaction(async (tx) => {
         await tx.order.update({ where: { id: input.orderId }, data: { status: 'CANCELLED' } });
         await publishEvent('order.cancelled', { orderId: input.orderId });
@@ -168,17 +168,17 @@ export const badOrderService = {
     }),
 
   processRefund: async (orderId: string, ctx: any) => {
-    // Non-null assertion on ctx — TRPC_CTX_NON_NULL_ASSERTION
+    // Non-null assertion on ctx - TRPC_CTX_NON_NULL_ASSERTION
     const userId = ctx.session!.user.id;
 
     const items = await prisma.orderLine.findMany({ where: { orderId } });
 
-    // async forEach — TS_ASYNC_FOR_EACH
+    // async forEach - TS_ASYNC_FOR_EACH
     items.forEach(async (item) => {
       await prisma.refund.create({ data: { itemId: item.id } });
     });
 
-    // Sensitive data logging — TS_SENSITIVE_DATA_LOGGING
+    // Sensitive data logging - TS_SENSITIVE_DATA_LOGGING
     console.log('Processing refund for token:', ctx.session!.token);
   },
 };
@@ -241,7 +241,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("scan_throughput");
     apply_quick_mode(&mut group);
 
-    // Clean Rust service — baseline (no violations, no extra work)
+    // Clean Rust service - baseline (no violations, no extra work)
     group.bench_function("rust_clean_service", |b| {
         let mut engine = Engine::new();
         b.iter(|| {
@@ -254,7 +254,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
         });
     });
 
-    // Rust service with violations — measures rule firing overhead
+    // Rust service with violations - measures rule firing overhead
     group.bench_function("rust_service_with_violations", |b| {
         let mut engine = Engine::new();
         b.iter(|| {
@@ -280,7 +280,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
         });
     });
 
-    // TypeScript with violations — taint + CSA + tRPC rules all fire
+    // TypeScript with violations - taint + CSA + tRPC rules all fire
     group.bench_function("ts_service_with_violations", |b| {
         let mut engine = Engine::new();
         b.iter(|| {
@@ -293,7 +293,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
         });
     });
 
-    // Real-world mixed TypeScript — representative of an actual service file
+    // Real-world mixed TypeScript - representative of an actual service file
     group.bench_function("ts_mixed_real_world", |b| {
         let mut engine = Engine::new();
         b.iter(|| {
@@ -309,7 +309,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-// ── Group 2: Scale — Files Per Second ────────────────────────────────────────
+// ── Group 2: Scale - Files Per Second ────────────────────────────────────────
 // Simulates scanning a real monorepo at different project sizes.
 // Uses a temp directory so the full Engine::run() path is exercised.
 
@@ -409,7 +409,7 @@ fn build_taint_chain(depth: usize) -> String {
 }
 
 // ── Group 4: Rule Compilation ─────────────────────────────────────────────────
-// Startup cost — how long does it take to compile the full rule set?
+// Startup cost - how long does it take to compile the full rule set?
 // Critical for CLI UX: cold start on every invocation.
 
 fn bench_rule_compilation(c: &mut Criterion) {
@@ -463,7 +463,7 @@ fn bench_symbol_registry(c: &mut Criterion) {
             });
         }
 
-        // Lookup at start, middle, end — covers tree traversal variance
+        // Lookup at start, middle, end - covers tree traversal variance
         group.bench_with_input(
             BenchmarkId::new("find_function_at/start", symbol_count),
             &symbol_count,
@@ -526,12 +526,12 @@ fn bench_fingerprinting(c: &mut Criterion) {
         owasp: None,
     };
 
-    // Measure identity() — used on every baseline comparison
+    // Measure identity() - used on every baseline comparison
     group.bench_function("advisory_identity", |b| {
         b.iter(|| black_box(advisory.identity()));
     });
 
-    // Measure fuzzy_identity() — used in resilient baseline matching
+    // Measure fuzzy_identity() - used in resilient baseline matching
     group.bench_function("advisory_fuzzy_identity", |b| {
         b.iter(|| black_box(advisory.fuzzy_identity()));
     });
@@ -541,11 +541,11 @@ fn bench_fingerprinting(c: &mut Criterion) {
 
 // ── Group 8: N-gram Post-Processing (Jaccard Similarity) ─────────────────────
 // Measures post_process_ngrams at increasing fingerprint counts.
-// This is O(n²) pairwise comparison — watch for quadratic degradation.
+// This is O(n²) pairwise comparison - watch for quadratic degradation.
 // Particularly important before v0.4.0 when the style-baseline adds more features.
 
 fn bench_post_process_ngrams(c: &mut Criterion) {
-    use rustc_hash::{FxHashSet, FxHasher};
+    use rustc_hash::FxHasher;
     use std::hash::{Hash, Hasher};
 
     let mut group = c.benchmark_group("post_process_ngrams");
@@ -586,19 +586,33 @@ fn bench_post_process_ngrams(c: &mut Criterion) {
                 function_name: format!("fn_{i}"),
                 line: i * 12 + 1,
                 language: "rust".to_string(),
-                ngram_hashes: hashes.clone(),
-                signature_ngrams: FxHashSet::default(),
-                param_type_ngrams: FxHashSet::default(),
+                ngram_hashes: hashes.into_iter().collect::<Vec<_>>(),
+                weighted_ngram_hashes: rustc_hash::FxHashMap::default(),
+                signature_ngrams: Vec::new(),
+                param_type_ngrams: Vec::new(),
                 name_segments: Vec::new(),
-                structural_markers: FxHashSet::default(),
+                structural_markers: Vec::new(),
                 type_usages: Vec::new(),
                 comment_density: 0.0,
-                weighted_ngram_hashes: rustc_hash::FxHashMap::default(),
-                semantic_markers: FxHashSet::default(),
+                semantic_markers: Vec::new(),
                 skeleton: Vec::new(),
-                control_flow_hashes: FxHashSet::default(),
-                api_calls: FxHashSet::default(),
-                property_accesses: FxHashSet::default(),
+                skeleton_hashes: Vec::new(),
+                control_flow_hashes: Vec::new(),
+                control_flow_sequence: Vec::new(),
+                api_calls: Vec::new(),
+                api_call_segments: Vec::new(),
+                property_accesses: Vec::new(),
+                motif_hashes: Vec::new(),
+                data_flow_path_hashes: Vec::new(),
+                raw_call_names: Vec::new(),
+                param_names: Vec::new(),
+                tainted_api_calls: Vec::new(),
+                config_literal_hashes: Vec::new(),
+                argument_call_types: Vec::new(),
+                literal_pattern_hashes: Vec::new(),
+                has_http_decorator: false,
+                is_registered_handler: false,
+                export_handler_kind: None,
             });
         }
 

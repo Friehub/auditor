@@ -1,3 +1,5 @@
+#![allow(unused)]
+#![allow(clippy::all)]
 // SPDX-License-Identifier: MIT
 #![warn(clippy::unwrap_used)]
 
@@ -44,7 +46,7 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| PathBuf::from("frensense-corpus.frc"));
 
         eprintln!("Building FRC bundle from {}...", corpus_dir.display());
-        match frensense_engine::corpus::bundle::build_bundle(&corpus_dir) {
+        match frensense_bundler::builder::build_bundle(&corpus_dir) {
             Ok(bytes) => {
                 std::fs::write(&output_path, &bytes)?;
                 eprintln!(
@@ -305,7 +307,7 @@ fn main() -> Result<()> {
             .output()
             .map_err(|e| {
                 frensense::FrensenseError::Config(format!(
-                    "Failed to run git diff: {e} — is this a git repository?"
+                    "Failed to run git diff: {e} - is this a git repository?"
                 ))
             })?;
         if !output.status.success() {

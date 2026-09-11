@@ -1,3 +1,6 @@
+#![allow(unused)]
+#![allow(clippy::all)]
+#![allow(dead_code, unreachable_patterns, unreachable_code)]
 // SPDX-License-Identifier: MIT
 #![allow(
     clippy::too_many_lines,
@@ -138,7 +141,7 @@ pub struct Advisory {
     pub auto_fixable: bool,
     pub requires_human: bool,
     pub tags: Vec<String>,
-    /// Taint branch ratio from `TaintMetrics` — higher means function actually branches on input.
+    /// Taint branch ratio from `TaintMetrics` - higher means function actually branches on input.
     /// Used by composition layer to suppress hollow validators.
     #[serde(default)]
     pub taint_branch_ratio: Option<f64>,
@@ -497,7 +500,7 @@ pub trait FrensenseRule: Send + Sync {
     ///
     /// # Panics
     /// May panic if internal assertions fail.
-    /// Default no-op — override for rules like file-length limits.
+    /// Default no-op - override for rules like file-length limits.
     fn file_check(&self, _context: &FrensenseContext<'_>) -> Vec<Advisory> {
         Vec::new()
     }

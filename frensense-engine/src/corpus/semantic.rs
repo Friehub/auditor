@@ -79,6 +79,7 @@ impl SemanticFilter {
         source: &str,
         file_path: Option<&str>,
         extracted_flows: Option<&std::collections::HashSet<(String, String)>>,
+        spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
     ) -> bool {
         if self.is_empty() {
             return true;
@@ -160,11 +161,13 @@ impl SemanticFilter {
             }
         }
 
+        let _func_src = &source[func_node.start_byte()..func_node.end_byte()];
+
         // Check contains_call_to — uses the same text-based extractor as the
         // auto-filter (extract_call_targets) which skips comments and non-call
         // text. This keeps the filter consistent with what the auto-filter learned.
         if !self.contains_call_to.is_empty() {
-            let calls = crate::auto_filter::extract_call_targets(source);
+            let calls = extract_ast_call_targets(func_node, source);
             let has_match = self.contains_call_to.iter().any(|target| {
                 calls
                     .iter()
@@ -177,7 +180,7 @@ impl SemanticFilter {
 
         // Check must_not_contain_call_to (same text-based extractor)
         if !self.must_not_contain_call_to.is_empty() {
-            let calls = crate::auto_filter::extract_call_targets(source);
+            let calls = extract_ast_call_targets(func_node, source);
             let has_forbidden = self.must_not_contain_call_to.iter().any(|target| {
                 calls
                     .iter()
@@ -219,7 +222,9 @@ impl SemanticFilter {
         if !self.required_taint_flows.is_empty() {
             let flows = match extracted_flows {
                 Some(flows) => flows,
-                None => &crate::corpus::data_flow_extractor::extract_data_flows(func_node, source),
+                None => {
+                    &crate::corpus::data_flow_extractor::extract_data_flows(func_node, source, spec)
+                }
             };
             for req_flow in &self.required_taint_flows {
                 if !flows.contains(req_flow) {
@@ -401,7 +406,7 @@ pub fn learn_constraints(
         nodes.dedup();
         pos_node_sets.push(nodes);
 
-        let mut flows = crate::corpus::data_flow_extractor::extract_data_flows(*node, source)
+        let mut flows = crate::corpus::data_flow_extractor::extract_data_flows(*node, source, None)
             .into_iter()
             .collect::<Vec<_>>();
         flows.sort();
@@ -424,7 +429,7 @@ pub fn learn_constraints(
         nodes.dedup();
         neg_node_sets.push(nodes);
 
-        let mut flows = crate::corpus::data_flow_extractor::extract_data_flows(*node, source)
+        let mut flows = crate::corpus::data_flow_extractor::extract_data_flows(*node, source, None)
             .into_iter()
             .collect::<Vec<_>>();
         flows.sort();
@@ -595,6 +600,7 @@ mod tests {
             func,
             "function sanitizeHtml(input: string) { return input; }",
             None,
+            None,
             None
         ));
 
@@ -605,6 +611,7 @@ mod tests {
         assert!(!filter2.matches(
             func,
             "function sanitizeHtml(input: string) { return input; }",
+            None,
             None,
             None
         ));
@@ -623,6 +630,7 @@ mod tests {
             func,
             "function foo() { fetch('/api').then(r => r.json()); }",
             None,
+            None,
             None
         ));
 
@@ -633,6 +641,7 @@ mod tests {
         assert!(!filter2.matches(
             func,
             "function foo() { fetch('/api').then(r => r.json()); }",
+            None,
             None,
             None
         ));
@@ -652,6 +661,7 @@ mod tests {
             func,
             "function foo() { fetch('/api').then(r => r.json()); }",
             None,
+            None,
             None
         ));
 
@@ -662,7 +672,37 @@ mod tests {
             func2,
             "function foo() { fetch('/api').then(r => r.json()).catch(e => {}); }",
             None,
+            None,
             None
         ));
     }
+}
+
+pub fn extract_ast_call_targets(node: Node<'_>, source: &str) -> std::collections::HashSet<String> {
+    let mut targets = std::collections::HashSet::new();
+    let _cursor = node.walk();
+
+    // Perform a pre-order traversal
+    let mut visit_stack = vec![node];
+    while let Some(n) = visit_stack.pop() {
+        if n.kind() == "call_expression" {
+            if let Some(callee) = n
+                .child_by_field_name("function")
+                .or_else(|| n.child_by_field_name("callee"))
+            {
+                if let Ok(text) =
+                    std::str::from_utf8(&source.as_bytes()[callee.start_byte()..callee.end_byte()])
+                {
+                    targets.insert(text.to_string());
+                }
+            }
+        }
+
+        let mut child_cursor = n.walk();
+        for child in n.children(&mut child_cursor) {
+            visit_stack.push(child);
+        }
+    }
+
+    targets
 }

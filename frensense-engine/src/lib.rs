@@ -1,3 +1,6 @@
+#![allow(unused)]
+#![allow(clippy::all)]
+#![allow(dead_code, unreachable_patterns, unreachable_code)]
 #![allow(
     clippy::too_many_lines,
     clippy::too_many_arguments,
@@ -16,8 +19,7 @@
     clippy::needless_pass_by_value
 )]
 
-pub(crate) mod ast_distance;
-pub(crate) mod auto_filter;
+pub mod ast_distance;
 pub mod cfg;
 pub mod context;
 pub mod corpus;
@@ -32,16 +34,12 @@ pub mod graph;
 pub mod import_resolver;
 pub(crate) mod lang;
 pub mod minhash;
-#[cfg(feature = "oxc")]
-pub mod oxc_provider;
 pub mod parser;
 pub mod pattern;
 pub mod per_pattern_calibration;
 #[cfg(feature = "full-analysis")]
 pub mod profile;
 pub(crate) mod route_registry;
-#[cfg(feature = "rust-hir")]
-pub mod rust_hir_provider;
 pub mod semantic;
 pub mod symbols;
 
@@ -60,7 +58,7 @@ pub struct FileId(pub u32);
 pub struct ScopeId(pub u64);
 
 /// Structured result of analyzing a single source file.
-/// This is the primary output of the engine — no advisories, no rules.
+/// This is the primary output of the engine - no advisories, no rules.
 #[derive(Debug, Clone)]
 pub struct AnalysisResult {
     pub language: String,
@@ -138,13 +136,13 @@ pub fn analyze_file(
         .ok_or_else(|| FrensenseError::ParseFailure("Failed to parse source".to_string()))?;
 
     let root = tree.root_node();
-    let import_map = import_resolver::ImportMap::build_from_tree(source, root);
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let import_map = import_resolver::ImportMap::build_from_tree(ext, source, root);
     let route_registry =
         route_registry::build_handler_registry(root, source, &file_path.to_string_lossy());
 
     let mut functions = Vec::new();
     let parser_registry = parser::ParserRegistry;
-    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
     fingerprint::extract_fingerprints(
         root,
         source,
@@ -166,7 +164,8 @@ pub fn analyze_file(
     let graph = symbols.graph().clone();
 
     #[cfg(feature = "full-analysis")]
-    let temporal_events = graph::extract_temporal_events(root, source, file_path);
+    let temporal_events =
+        graph::extract_temporal_events(root, source, file_path, frensense_lang::spec_for_ext(ext));
 
     let semantic_ops =
         crate::data_flow::normalization::SemanticExtractor::extract(root, source, ext);
@@ -235,9 +234,16 @@ pub fn analyze_project(
 
         // 3. Register exposed taint sources (e.g. HTTP handlers)
         for res in results.values() {
+            let spec = Path::new(&res.file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(frensense_lang::spec_for_ext);
             for func in &res.functions {
-                let role =
-                    crate::function_role::classify_role_with_imports(func, Some(&res.import_map));
+                let role = crate::function_role::classify_role_with_imports(
+                    func,
+                    Some(&res.import_map),
+                    spec,
+                );
                 if role == crate::function_role::FunctionRole::HttpHandler {
                     let key = format!("{}:{}", res.file_path, func.function_name);
                     resolver.register_exposed_taint(
@@ -253,13 +259,20 @@ pub fn analyze_project(
         //     functions (DataTransformer, etc.) called by seeded sources are also
         //     treated as taint sources.  Without this, multi-hop chains like
         //     HttpHandler → service → repository → DB fail to resolve.
-        resolver.propagate_taint();
+        resolver.propagate_taint(None);
 
         // 4. Resolve taint for sinks (e.g. DbQuery, ShellExecutor) and update fingerprints
         for res in results.values_mut() {
+            let spec = Path::new(&res.file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(frensense_lang::spec_for_ext);
             for func in &mut res.functions {
-                let role =
-                    crate::function_role::classify_role_with_imports(func, Some(&res.import_map));
+                let role = crate::function_role::classify_role_with_imports(
+                    func,
+                    Some(&res.import_map),
+                    spec,
+                );
                 if matches!(
                     role,
                     crate::function_role::FunctionRole::DbQuery
@@ -301,9 +314,13 @@ pub fn analyze_project(
     // 1. Identify all functions that return taint (e.g. DbQuery)
     let mut taint_returning_functions = rustc_hash::FxHashSet::default();
     for res in results.values() {
+        let spec = Path::new(&res.file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(frensense_lang::spec_for_ext);
         for func in &res.functions {
             let role =
-                crate::function_role::classify_role_with_imports(func, Some(&res.import_map));
+                crate::function_role::classify_role_with_imports(func, Some(&res.import_map), spec);
             if matches!(role, crate::function_role::FunctionRole::DbQuery) {
                 taint_returning_functions.insert(func.function_name.clone());
             }
@@ -312,45 +329,48 @@ pub fn analyze_project(
 
     // 2. Map call sites to bindings
     for (file_path, res) in &results {
+        let mut bindings = Vec::new();
+        let mut calls = Vec::new();
+
         for op in &res.semantic_ops {
-            if let crate::data_flow::normalization::SemanticOp::Call {
-                function_name,
-                range,
-                ..
-            } = op
-            {
-                if taint_returning_functions.contains(function_name) {
-                    // Find a binding that encompasses this call
-                    for other_op in &res.semantic_ops {
-                        match other_op {
-                            crate::data_flow::normalization::SemanticOp::Binding {
-                                name,
-                                value_range,
-                            } => {
-                                if value_range.start_byte <= range.start_byte
-                                    && value_range.end_byte >= range.end_byte
-                                {
-                                    local_tainted_vars
-                                        .entry(file_path.clone())
-                                        .or_default()
-                                        .push(name.clone());
-                                }
-                            }
-                            crate::data_flow::normalization::SemanticOp::Assignment {
-                                target,
-                                value_range,
-                            } => {
-                                if value_range.start_byte <= range.start_byte
-                                    && value_range.end_byte >= range.end_byte
-                                {
-                                    local_tainted_vars
-                                        .entry(file_path.clone())
-                                        .or_default()
-                                        .push(target.clone());
-                                }
-                            }
-                            _ => {}
-                        }
+            match op {
+                crate::data_flow::normalization::SemanticOp::Binding { name, value_range } => {
+                    bindings.push((name, value_range));
+                }
+                crate::data_flow::normalization::SemanticOp::Assignment {
+                    target,
+                    value_range,
+                } => {
+                    bindings.push((target, value_range));
+                }
+                crate::data_flow::normalization::SemanticOp::Call {
+                    function_name,
+                    range,
+                    ..
+                } => {
+                    calls.push((function_name, range));
+                }
+                _ => {}
+            }
+        }
+
+        // Pre-sort bindings by start_byte for fast O(log N) lookup
+        bindings.sort_by_key(|(_, r)| r.start_byte);
+
+        for (function_name, range) in calls {
+            if taint_returning_functions.contains(function_name) {
+                // Find all bindings that start before or at `range.start_byte`
+                let idx = bindings.partition_point(|(_, r)| r.start_byte <= range.start_byte);
+
+                // Scan backwards to find the tightest encompassing binding
+                for (name, v_range) in bindings[..idx].iter().rev() {
+                    if v_range.end_byte >= range.end_byte {
+                        local_tainted_vars
+                            .entry(file_path.clone())
+                            .or_default()
+                            .push((*name).clone());
+                        // A call can only be assigned to one encompassing binding in the AST
+                        break;
                     }
                 }
             }
@@ -369,3 +389,4 @@ pub fn analyze_project(
         },
     })
 }
+pub mod auto_filter;

@@ -19,7 +19,10 @@ pub fn print_help() {
     println!();
     println!("Detection Options:");
     println!("  --corpus <dir>      Load detection patterns from corpus directory");
-    println!("  --use-compiler      Enable exact semantic resolution (Oxc for TS, rust-analyzer for RS)");
+    println!(
+        "  --use-compiler      Enable exact semantic resolution (Oxc for TS, rust-analyzer for RS)"
+    );
+
     println!("  --threshold <0-1>   Corpus match threshold (default: 0.40)");
     println!("  --language <lang>   Language filter: rust, typescript, javascript, yaml");
     println!("  --diff-only         Only scan files changed since the last git commit");
@@ -58,7 +61,9 @@ pub fn print_help() {
     println!();
     println!("Corpus Development:");
     println!("  --build-bundle       Compile the corpus into a binary .frc bundle");
-    println!("  --build-bundle-output <file>  Output path for the bundle (default: frensense-corpus.frc)");
+    println!(
+        "  --build-bundle-output <file>  Output path for the bundle (default: frensense-corpus.frc)"
+    );
     println!();
     println!("Information:");
     println!("  --version           Display version and enabled features");
@@ -116,7 +121,7 @@ pub fn handle_list_rules() -> Result<()> {
 }
 
 pub fn handle_list_patterns(corpus_dir: Option<&str>) -> Result<()> {
-    use frensense_engine::corpus::loader::load_corpus;
+    use frensense_bundler::loader::load_corpus;
     let dir = corpus_dir.unwrap_or("corpus/targets");
     let path = std::path::Path::new(dir);
     if !path.exists() {

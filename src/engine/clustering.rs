@@ -315,6 +315,7 @@ mod tests {
             std::path::Path::new("test.rs"),
             &mut fps,
             5,
+            None,
         );
         assert!(!fps.is_empty(), "no fingerprint for {source}");
         fps.remove(0)

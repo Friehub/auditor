@@ -1,162 +1,180 @@
 // SPDX-License-Identifier: MIT
 
+use frensense_lang::NodeRole;
+
 use crate::lang::Language;
 use crate::lang::kinds::AbstractKind;
 
+/// Map a tree-sitter node kind to an [`AbstractKind`] using the
+/// [`frensense_lang`] registry as the single source of truth.
+///
+/// Previously this function contained six separate per-language match arms
+/// (Rust, TypeScript, JavaScript, C, Python, Go). Now it delegates to
+/// `Language::spec().classify()` and bridges `NodeRole` → `AbstractKind`.
 pub fn abstract_kind(ts_kind: &str, language: Language) -> AbstractKind {
+    // If we have a spec for this language, use it.
+    if let Some(spec) = language.spec() {
+        return node_role_to_abstract_kind(spec.classify(ts_kind), ts_kind, language);
+    }
+
+    // Html has no spec registered; keep a minimal inline map.
+    match ts_kind {
+        "element" | "script_element" | "style_element" => AbstractKind::Block,
+        "text" | "doctype" => AbstractKind::StringLiteral,
+        _ => AbstractKind::Other,
+    }
+}
+
+/// Convert a [`NodeRole`] (from frensense-lang) into the engine's
+/// [`AbstractKind`] (used for structural hashing in the fingerprinter).
+///
+/// `NodeRole` is the canonical, language-agnostic classification.
+/// `AbstractKind` is a slightly different enumeration that the engine has
+/// been using for structural n-grams. This bridge keeps both working while
+/// the engine migrates incrementally.
+fn node_role_to_abstract_kind(role: NodeRole, ts_kind: &str, language: Language) -> AbstractKind {
+    match role {
+        // ── Definitions ──────────────────────────────────────────────────
+        NodeRole::Function {
+            is_method: true, ..
+        } => AbstractKind::MethodDef,
+        NodeRole::Function {
+            is_method: false, ..
+        } => {
+            // Closures and lambdas still want Closure in the abstract kind
+            let is_closure = matches!(
+                ts_kind,
+                "arrow_function"
+                    | "closure_expression"
+                    | "func_literal"
+                    | "lambda"
+                    | "function_expression"
+                    | "async_function_expression"
+            );
+            if is_closure {
+                AbstractKind::Closure
+            } else {
+                AbstractKind::FunctionDef
+            }
+        }
+
+        // ── Declarations / assignments ───────────────────────────────────
+        NodeRole::Declaration { .. } => AbstractKind::Assign,
+        NodeRole::Assignment { .. } => AbstractKind::Assign,
+
+        // ── Calls ────────────────────────────────────────────────────────
+        NodeRole::Call { .. } => AbstractKind::Call,
+        NodeRole::MemberAccess { .. } => AbstractKind::MethodCall,
+
+        // ── Control flow ─────────────────────────────────────────────────
+        NodeRole::Branch => AbstractKind::Conditional,
+        NodeRole::Loop => AbstractKind::Loop,
+        NodeRole::Return => AbstractKind::Return,
+        NodeRole::Try | NodeRole::Catch | NodeRole::Finally => AbstractKind::TryCatch,
+        NodeRole::Throw => AbstractKind::Throw,
+        NodeRole::ErrorGuard => AbstractKind::Conditional,
+        NodeRole::ErrorPropagation => AbstractKind::TryCatch,
+        NodeRole::ContextManager => AbstractKind::TryCatch,
+        NodeRole::Await => AbstractKind::Await,
+
+        // ── Structural ───────────────────────────────────────────────────
+        NodeRole::Block => AbstractKind::Block,
+        NodeRole::Import => AbstractKind::ImportDecl,
+        NodeRole::Export => AbstractKind::ExportDecl,
+        NodeRole::Identifier => AbstractKind::Identifier,
+        NodeRole::Literal => {
+            // Distinguish string vs number vs bool using the raw ts_kind.
+            // This preserves the fingerprint granularity that existing corpus
+            // entries were built with.
+            match ts_kind {
+                "string"
+                | "string_literal"
+                | "raw_string_literal"
+                | "template_string"
+                | "interpreted_string_literal"
+                | "string_fragment"
+                | "char_literal" => AbstractKind::StringLiteral,
+
+                "number" | "integer_literal" | "float_literal" | "int_literal"
+                | "number_literal" => AbstractKind::NumberLiteral,
+
+                "true" | "false" | "boolean_literal" | "none" => AbstractKind::BoolLiteral,
+
+                _ => AbstractKind::StringLiteral,
+            }
+        }
+
+        // ── Language-specific extras via raw ts_kind ─────────────────────
+        // NodeRole::Other covers things the lang spec doesn't classify.
+        // We still want to catch a few engine-specific extras per language.
+        NodeRole::Other => other_to_abstract_kind(ts_kind, language),
+    }
+}
+
+/// Fallback handler for `NodeRole::Other` — maps a small set of language-
+/// specific node kinds that `AbstractKind` tracks but `NodeRole` doesn't have
+/// a variant for (e.g. struct/enum/trait definitions, unsafe blocks).
+fn other_to_abstract_kind(ts_kind: &str, language: Language) -> AbstractKind {
     match language {
         Language::Rust => match ts_kind {
-            "function_item" => AbstractKind::FunctionDef,
             "struct_item" => AbstractKind::StructDef,
             "enum_item" => AbstractKind::EnumDef,
             "trait_item" => AbstractKind::InterfaceDef,
             "const_item" => AbstractKind::ConstDef,
             "mod_item" => AbstractKind::ModuleDef,
             "impl_item" => AbstractKind::ClassDef,
-            "closure_expression" => AbstractKind::Closure,
-            "call_expression" => AbstractKind::Call,
-            "await_expression" => AbstractKind::Await,
-            "return_expression" | "return_statement" => AbstractKind::Return,
-            "let_declaration" => AbstractKind::Assign,
-            "assignment_expression" => AbstractKind::Assign,
-            "if_expression" | "if_statement" => AbstractKind::Conditional,
-            "for_expression" | "while_expression" | "loop_expression" => AbstractKind::Loop,
-            "match_expression" => AbstractKind::Match,
             "unsafe_block" => AbstractKind::Unsafe,
             "async_block" => AbstractKind::Async,
-            "block" | "block_expression" => AbstractKind::Block,
+            "match_expression" => AbstractKind::Match,
             "parameters" | "self_parameter" | "parameter" => AbstractKind::Parameters,
             "arguments" => AbstractKind::Arguments,
-            "use_declaration" => AbstractKind::ImportDecl,
-            "field_expression" => AbstractKind::MethodCall,
             "binary_expression" => AbstractKind::BinaryOp,
             "unary_expression" => AbstractKind::UnaryOp,
-            "try_expression" => AbstractKind::TryCatch,
-            "macro_invocation" => AbstractKind::Call,
-            "string_literal" | "raw_string_literal" => AbstractKind::StringLiteral,
-            "integer_literal" | "float_literal" => AbstractKind::NumberLiteral,
-            "boolean_literal" => AbstractKind::BoolLiteral,
-            "identifier" => AbstractKind::Identifier,
-            "type_identifier" | "primitive_type" => AbstractKind::TypeAnnotation,
-            "scoped_identifier" | "scoped_type_identifier" => AbstractKind::Identifier,
+            "type_identifier"
+            | "primitive_type"
+            | "scoped_identifier"
+            | "scoped_type_identifier" => AbstractKind::Identifier,
             _ => AbstractKind::Other,
         },
         Language::TypeScript | Language::JavaScript => match ts_kind {
-            "function_declaration" | "function" => AbstractKind::FunctionDef,
-            "method_definition" => AbstractKind::MethodDef,
             "class_declaration" => AbstractKind::ClassDef,
             "interface_declaration" => AbstractKind::InterfaceDef,
             "enum_declaration" => AbstractKind::EnumDef,
-            "arrow_function" => AbstractKind::Closure,
-            "call_expression" => AbstractKind::Call,
-            "await_expression" => AbstractKind::Await,
-            "return_statement" => AbstractKind::Return,
-            "variable_declaration" | "variable_declarator" | "lexical_declaration" => {
-                AbstractKind::Assign
-            }
-            "assignment_expression" => AbstractKind::Assign,
-            "if_statement" | "ternary_expression" => AbstractKind::Conditional,
-            "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => {
-                AbstractKind::Loop
-            }
             "switch_statement" => AbstractKind::Match,
-            "try_statement" => AbstractKind::TryCatch,
-            "throw_statement" => AbstractKind::Throw,
-            "statement_block" => AbstractKind::Block,
-            "import_statement" => AbstractKind::ImportDecl,
-            "export_statement" => AbstractKind::ExportDecl,
-            "member_expression" => AbstractKind::MethodCall,
-            "binary_expression" => AbstractKind::BinaryOp,
-            "unary_expression" => AbstractKind::UnaryOp,
-            "string" | "template_string" | "string_fragment" => AbstractKind::StringLiteral,
-            "number" => AbstractKind::NumberLiteral,
-            "true" | "false" => AbstractKind::BoolLiteral,
-            "identifier" | "property_identifier" | "shorthand_property_identifier" => {
-                AbstractKind::Identifier
-            }
             "formal_parameters" => AbstractKind::Parameters,
             "arguments" => AbstractKind::Arguments,
-            "type_annotation" | "type_arguments" => AbstractKind::Other,
-            "new_expression" => AbstractKind::Call,
-            _ => AbstractKind::Other,
-        },
-        Language::C => match ts_kind {
-            "function_definition" => AbstractKind::FunctionDef,
-            "call_expression" => AbstractKind::Call,
-            "return_statement" => AbstractKind::Return,
-            "declaration" => AbstractKind::Assign,
-            "assignment_expression" => AbstractKind::Assign,
-            "if_statement" | "conditional_expression" => AbstractKind::Conditional,
-            "for_statement" | "while_statement" | "do_statement" => AbstractKind::Loop,
-            "switch_statement" => AbstractKind::Match,
-            "compound_statement" => AbstractKind::Block,
-            "string_literal" | "system_lib_string" => AbstractKind::StringLiteral,
-            "number_literal" => AbstractKind::NumberLiteral,
-            "true" | "false" => AbstractKind::BoolLiteral,
-            "identifier" => AbstractKind::Identifier,
-            "parameter_list" => AbstractKind::Parameters,
-            "argument_list" => AbstractKind::Arguments,
-            "field_expression" => AbstractKind::MethodCall,
             "binary_expression" => AbstractKind::BinaryOp,
             "unary_expression" => AbstractKind::UnaryOp,
-            "pointer_declarator" => AbstractKind::Identifier,
+            "type_annotation" | "type_arguments" => AbstractKind::Other,
             _ => AbstractKind::Other,
         },
         Language::Python => match ts_kind {
-            "function_definition" | "async_function_definition" => AbstractKind::FunctionDef,
             "class_definition" => AbstractKind::ClassDef,
-            "decorated_definition" => AbstractKind::FunctionDef,
-            "call" => AbstractKind::Call,
-            "await" => AbstractKind::Await,
-            "return_statement" => AbstractKind::Return,
-            "assignment" => AbstractKind::Assign,
-            "if_statement" | "conditional_expression" => AbstractKind::Conditional,
-            "for_statement" | "while_statement" => AbstractKind::Loop,
             "match_statement" => AbstractKind::Match,
-            "try_statement" => AbstractKind::TryCatch,
-            "raise_statement" => AbstractKind::Throw,
-            "lambda" => AbstractKind::Closure,
-            "block" => AbstractKind::Block,
             "parameters" => AbstractKind::Parameters,
             "argument_list" => AbstractKind::Arguments,
-            "import_statement" | "import_from_statement" => AbstractKind::ImportDecl,
-            "string" | "string_literal" => AbstractKind::StringLiteral,
-            "integer" | "float" => AbstractKind::NumberLiteral,
-            "true" | "false" | "none" => AbstractKind::BoolLiteral,
-            "identifier" => AbstractKind::Identifier,
-            "attribute" => AbstractKind::MethodCall,
             "binary_operator" => AbstractKind::BinaryOp,
             "unary_operator" => AbstractKind::UnaryOp,
             "type" => AbstractKind::TypeAnnotation,
             _ => AbstractKind::Other,
         },
         Language::Go => match ts_kind {
-            "function_declaration" | "method_declaration" => AbstractKind::FunctionDef,
-            "call_expression" => AbstractKind::Call,
-            "return_statement" => AbstractKind::Return,
-            "assignment_statement" | "short_var_declaration" => AbstractKind::Assign,
-            "if_statement" => AbstractKind::Conditional,
-            "for_statement" => AbstractKind::Loop,
             "expression_switch_statement" | "type_switch_statement" => AbstractKind::Match,
             "defer_statement" | "go_statement" => AbstractKind::Call,
-            "block" => AbstractKind::Block,
             "parameter_list" => AbstractKind::Parameters,
             "argument_list" => AbstractKind::Arguments,
-            "import_declaration" => AbstractKind::ImportDecl,
-            "interpreted_string_literal" | "raw_string_literal" => AbstractKind::StringLiteral,
-            "int_literal" | "float_literal" => AbstractKind::NumberLiteral,
-            "identifier" | "field_identifier" | "type_identifier" => AbstractKind::Identifier,
-            "selector_expression" => AbstractKind::MethodCall,
+            "binary_expression" => AbstractKind::BinaryOp,
+            "unary_expression" => AbstractKind::UnaryOp,
+            "field_identifier" | "type_identifier" => AbstractKind::Identifier,
+            _ => AbstractKind::Other,
+        },
+        Language::C => match ts_kind {
+            "parameter_list" | "parameter_declaration" => AbstractKind::Parameters,
+            "argument_list" => AbstractKind::Arguments,
             "binary_expression" => AbstractKind::BinaryOp,
             "unary_expression" => AbstractKind::UnaryOp,
             _ => AbstractKind::Other,
         },
-        Language::Html => match ts_kind {
-            "element" | "script_element" | "style_element" | "raw_text" => AbstractKind::Other,
-            "attribute" | "attribute_name" | "attribute_value" => AbstractKind::Other,
-            "text" | "doctype" => AbstractKind::StringLiteral,
-            "comment" => AbstractKind::Other,
-            _ => AbstractKind::Other,
-        },
+        Language::Html => AbstractKind::Other,
     }
 }

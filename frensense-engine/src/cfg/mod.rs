@@ -146,7 +146,8 @@ impl<'a> ControlFlowGraph<'a> {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlowGraph<'a> {
+pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, ext: &str) -> ControlFlowGraph<'a> {
+    let spec = frensense_lang::spec_for_ext(ext);
     let mut blocks: Vec<BasicBlock<'a>> = Vec::new();
     let mut label_index: FxHashMap<String, usize> = FxHashMap::default();
 
@@ -177,8 +178,12 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
         let node = cursor.node();
         let kind = node.kind();
 
-        match kind {
-            "if_statement" | "if_expression" | "ternary_expression" => {
+        let role = spec
+            .map(|s| s.classify(kind))
+            .unwrap_or(frensense_lang::NodeRole::Other);
+
+        match role {
+            frensense_lang::NodeRole::Branch => {
                 let branch_block = blocks.len();
                 let merge_block = blocks.len() + 1;
                 blocks.push(BasicBlock {
@@ -220,7 +225,7 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                 parent_stack.push(current_block);
                 current_block = branch_block;
             }
-            "loop_block" | "for_statement" | "while_statement" | "do_statement" => {
+            frensense_lang::NodeRole::Loop => {
                 let loop_body = blocks.len();
                 let after_loop = blocks.len() + 1;
                 blocks.push(BasicBlock {
@@ -252,7 +257,7 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                 parent_stack.push(current_block);
                 current_block = loop_body;
             }
-            "try_statement" => {
+            frensense_lang::NodeRole::Try => {
                 let try_entry = blocks.len();
                 let catch_b = blocks.len() + 1;
                 let finally_b = blocks.len() + 2;
@@ -305,22 +310,18 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                 try_stack.push((try_entry, catch_b, finally_b, try_merge));
                 current_block = try_entry;
             }
-            "catch_clause" => {
+            frensense_lang::NodeRole::Catch => {
                 if let Some(&(try_entry, catch_b, finally_b, _try_merge)) = try_stack.last() {
-                    // Exception edge from try body entry to catch block
                     blocks[try_entry]
                         .successors
                         .push((catch_b, CFEdgeKind::Exception));
                     blocks[catch_b].predecessors.push(try_entry);
-                    // Add an exception edge from the current block (end of try body)
-                    // to catch so any basic block in the try body can throw
                     if current_block != try_entry {
                         blocks[current_block]
                             .successors
                             .push((catch_b, CFEdgeKind::Exception));
                         blocks[catch_b].predecessors.push(current_block);
                     }
-                    // If there's a finally, also connect catch body exit to finally
                     let catch_body_end = blocks.len();
                     blocks.push(BasicBlock {
                         id: catch_body_end,
@@ -339,9 +340,8 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                     current_block = catch_b;
                 }
             }
-            "finally_clause" => {
+            frensense_lang::NodeRole::Finally => {
                 if let Some(&(try_entry, _catch_b, finally_b, _try_merge)) = try_stack.last() {
-                    // Connect current block (end of try body or catch body) to finally
                     if current_block != try_entry {
                         blocks[current_block]
                             .successors
@@ -352,13 +352,14 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                     current_block = finally_b;
                 }
             }
-            "labeled_statement" => {
-                if let Some(label) = node.child_by_field_name("label") {
-                    let label_text = source[label.start_byte()..label.end_byte()].to_string();
-                    label_index.insert(label_text, current_block);
+            _ => {
+                if kind == "labeled_statement" {
+                    if let Some(label) = node.child_by_field_name("label") {
+                        let label_text = source[label.start_byte()..label.end_byte()].to_string();
+                        label_index.insert(label_text, current_block);
+                    }
                 }
             }
-            _ => {}
         }
 
         if cursor.goto_first_child() {
@@ -389,7 +390,7 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
                     exit,
                     label_index,
                 };
-                split_statement_blocks(&mut cfg);
+                split_statement_blocks(&mut cfg, spec);
                 return cfg;
             }
             if let Some(parent_id) = parent_stack.pop() {
@@ -403,23 +404,38 @@ pub fn build_cfg<'a>(root: Node<'a>, source: &'a str, _ext: &str) -> ControlFlow
     }
 }
 
-fn is_statement_node(kind: &str) -> bool {
-    matches!(
-        kind,
-        "let_declaration"
-            | "lexical_declaration"
-            | "variable_declaration"
-            | "expression_statement"
-            | "assignment_expression"
-            | "return_statement"
-            | "return_expression"
-            | "call_expression"
-    )
+fn is_statement_node(kind: &str, spec: Option<&dyn frensense_lang::LanguageSpec>) -> bool {
+    if let Some(s) = spec {
+        use frensense_lang::NodeRole;
+        matches!(
+            s.classify(kind),
+            NodeRole::Declaration { .. }
+                | NodeRole::Assignment { .. }
+                | NodeRole::Return
+                | NodeRole::Call { .. }
+        ) || kind == "expression_statement"
+    } else {
+        matches!(
+            kind,
+            "let_declaration"
+                | "lexical_declaration"
+                | "variable_declaration"
+                | "expression_statement"
+                | "assignment_expression"
+                | "return_statement"
+                | "return_expression"
+                | "call_expression"
+        )
+    }
 }
 
-fn collect_statement_nodes<'a>(node: Node<'a>, statements: &mut Vec<Node<'a>>) {
+fn collect_statement_nodes<'a>(
+    node: Node<'a>,
+    statements: &mut Vec<Node<'a>>,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) {
     let kind = node.kind();
-    if is_statement_node(kind) {
+    if is_statement_node(kind, spec) {
         statements.push(node);
         return;
     }
@@ -427,7 +443,7 @@ fn collect_statement_nodes<'a>(node: Node<'a>, statements: &mut Vec<Node<'a>>) {
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            collect_statement_nodes(cursor.node(), statements);
+            collect_statement_nodes(cursor.node(), statements, spec);
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -435,7 +451,10 @@ fn collect_statement_nodes<'a>(node: Node<'a>, statements: &mut Vec<Node<'a>>) {
     }
 }
 
-fn split_statement_blocks(cfg: &mut ControlFlowGraph) {
+fn split_statement_blocks(
+    cfg: &mut ControlFlowGraph,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) {
     let n = cfg.blocks.len();
     let mut new_blocks: Vec<BasicBlock> = Vec::new();
     let mut block_map: FxHashMap<usize, (usize, usize)> = FxHashMap::default();
@@ -458,7 +477,7 @@ fn split_statement_blocks(cfg: &mut ControlFlowGraph) {
         } else {
             let mut statements: Vec<Node> = Vec::new();
             for &node in &block.nodes {
-                collect_statement_nodes(node, &mut statements);
+                collect_statement_nodes(node, &mut statements, spec);
             }
 
             if statements.len() <= 1 {

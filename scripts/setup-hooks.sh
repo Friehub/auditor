@@ -4,7 +4,7 @@
 
 set -e
 
-HOOK_SOURCE="hooks/pre-commit"
+HOOK_SOURCE="scripts/pre-commit"
 HOOK_TARGET=".git/hooks/pre-commit"
 
 if [ ! -d ".git" ]; then

@@ -21,12 +21,12 @@ use std::sync::Arc;
 use frensense_engine::context::Environment;
 use frensense_engine::corpus::source_sink::CorpusSourceSinkRegistry;
 use frensense_engine::import_resolver::ImportMap;
-use frensense_engine::oxc_provider::OxcProvider;
 use frensense_engine::semantic::{ImportMapProvider, SemanticProvider};
+use frensense_providers::oxc_provider::OxcProvider;
 use tree_sitter::Tree;
 
 #[cfg(feature = "rust-hir")]
-use frensense_engine::rust_hir_provider::RustHirProvider;
+use frensense_providers::rust_hir_provider::RustHirProvider;
 
 /// Pre-built HIR map for the analysed workspace, or `()` when the `rust-hir`
 /// feature is not compiled in. Keeping a single `RustHirMap` name lets the
@@ -76,7 +76,7 @@ pub fn per_file_provider(
     }
 
     Box::new(ImportMapProvider::new(
-        ImportMap::build_from_tree(source, tree.root_node()),
+        ImportMap::build_from_tree(&ext, source, tree.root_node()),
         source_sink,
         environment,
     ))

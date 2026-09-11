@@ -13,6 +13,7 @@ fn test_extracted_flows() {
     let flows = frensense_engine::corpus::data_flow_extractor::extract_data_flows(
         tree.root_node(),
         &source,
+        frensense_lang::spec_for_ext("ts"),
     );
     println!("EXTRACTED_FLOWS: {:#?}", flows);
     assert!(!flows.is_empty());

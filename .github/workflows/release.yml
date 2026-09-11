@@ -133,6 +133,17 @@ jobs:
       - name: Build CLI Binary
         run: cargo build --release --target ${{ matrix.settings.target }}
 
+      - name: Build FRC Bundle
+        if: matrix.settings.host == 'ubuntu-latest'
+        run: cargo run --release --bin frensense-bundler -- -c corpus/targets -o frensense-corpus.frc
+
+      - name: Upload FRC Artifact
+        if: matrix.settings.host == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frensense-corpus
+          path: frensense-corpus.frc
+
       - name: Smoke test CLI binary
         shell: bash
         run: |
@@ -267,6 +278,7 @@ jobs:
           cp artifacts/cli-x86_64-apple-darwin/frensense          ./dist/binaries/frensense-macos-x64
           cp artifacts/cli-aarch64-apple-darwin/frensense          ./dist/binaries/frensense-macos-arm64
           cp artifacts/cli-x86_64-pc-windows-msvc/frensense.exe   ./dist/binaries/frensense-windows-x64.exe
+          cp artifacts/frensense-corpus/frensense-corpus.frc      ./dist/frensense-corpus.frc
 
       - name: Test NPM package before publish
         run: |
@@ -323,6 +335,7 @@ jobs:
             if [[ "$target" == *"windows"* ]]; then ext=".exe"; fi
             cp "${dir}frensense${ext}" "release-binaries/frensense-${target}${ext}"
           done
+          cp artifacts/frensense-corpus/frensense-corpus.frc release-binaries/
       - name: Release
         uses: softprops/action-gh-release@v2
         with:

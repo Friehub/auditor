@@ -99,7 +99,85 @@ impl SanitizerRegistry {
         r
     }
 
+    pub fn load_from_spec(&mut self, spec: &dyn frensense_lang::LanguageSpec) {
+        // Reclassify every existing entry through the spec instead of probing
+        // a hardcoded candidate list.  This ensures the registry stays in sync
+        // with the spec's full sanitizer catalogue.
+
+        let full_names: Vec<String> = self.full_sanitizers.iter().cloned().collect();
+        let ctx_names: Vec<String> = self.context_sanitizers.keys().cloned().collect();
+
+        // Full sanitizers → reclassify
+        for name in &full_names {
+            self.full_sanitizers.remove(name);
+            if let Some(kind) = spec.classify_sanitizer(name) {
+                match kind {
+                    frensense_lang::SanitizerKind::Full => {
+                        self.full_sanitizers.insert(name.clone());
+                    }
+                    frensense_lang::SanitizerKind::HtmlEscape
+                    | frensense_lang::SanitizerKind::UrlEncode => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::Url);
+                    }
+                    frensense_lang::SanitizerKind::SqlParameterize => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::Sql);
+                    }
+                    frensense_lang::SanitizerKind::PathNormalize => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::FilePath);
+                    }
+                }
+            }
+        }
+
+        // Context sanitizers → reclassify
+        for name in &ctx_names {
+            self.context_sanitizers.remove(name);
+            if let Some(kind) = spec.classify_sanitizer(name) {
+                match kind {
+                    frensense_lang::SanitizerKind::Full => {
+                        self.full_sanitizers.insert(name.clone());
+                    }
+                    frensense_lang::SanitizerKind::HtmlEscape
+                    | frensense_lang::SanitizerKind::UrlEncode => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::Url);
+                    }
+                    frensense_lang::SanitizerKind::SqlParameterize => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::Sql);
+                    }
+                    frensense_lang::SanitizerKind::PathNormalize => {
+                        self.context_sanitizers
+                            .insert(name.clone(), SinkContext::FilePath);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn is_full_sanitizer(&self, name: &str) -> bool {
         self.full_sanitizers.contains(name)
+    }
+
+    /// Check if `name` is a full sanitizer, also consulting the spec when
+    /// available.  This allows the engine to recognise sanitizers that are not
+    /// in the hardcoded defaults but are declared by the language spec.
+    pub fn is_full_sanitizer_with_spec(
+        &self,
+        name: &str,
+        spec: Option<&dyn frensense_lang::LanguageSpec>,
+    ) -> bool {
+        if self.full_sanitizers.contains(name) {
+            return true;
+        }
+        if let Some(s) = spec {
+            if let Some(kind) = s.classify_sanitizer(name) {
+                return matches!(kind, frensense_lang::SanitizerKind::Full);
+            }
+        }
+        false
     }
 }

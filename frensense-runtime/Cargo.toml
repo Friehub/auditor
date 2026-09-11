@@ -1,6 +1,6 @@
 [package]
 name = "frensense-runtime"
-version = "0.1.0"
+version = "0.6.0"
 authors = ["Friehub Developers"]
 edition = "2024"
 description = "Frensense Runtime — corpus-driven runtime verification layer that confirms or refutes static findings"
@@ -13,8 +13,8 @@ name = "frensense-runtime"
 path = "src/main.rs"
 
 [dependencies]
-frensense = { path = "..", version = "0.5.0" }
-frensense-engine = { path = "../frensense-engine", version = "0.5.0" }
+frensense = { path = "..", version = "0.6.0" }
+frensense-engine = { path = "../frensense-engine", version = "0.6.0" }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "cookies"] }
 serde = { version = "1.0", features = ["derive"] }

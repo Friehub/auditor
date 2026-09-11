@@ -1,6 +1,6 @@
 [package]
 name = "frensense-engine"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Friehub Developers"]
 edition = "2024"
 description = "Frensense engine core — structural code analysis primitives (fingerprints, profiles, semantic graph, taint, temporal events)"
@@ -12,6 +12,9 @@ rust-version = "1.95"
 name = "frensense_engine"
 
 [dependencies]
+frensense-lang = { path = "../frensense-lang", version = "0.6.0" }
+frensense-frc = { path = "../frensense-frc", version = "0.6.0" }
+
 tracing = "0.1"
 tree-sitter = "0.23"
 tree-sitter-rust = { version = "0.23", optional = true }
@@ -29,52 +32,31 @@ serde_json = { version = "1.0", optional = true }
 bincode = { version = "1", optional = true }
 blake3 = { version = "1.5", optional = true }
 toml = "0.8"
-oxc_allocator = { version = "0.143", optional = true }
-oxc_ast = { version = "0.143", optional = true }
-oxc_ast_visit = { version = "0.143", optional = true }
-oxc_parser = { version = "0.143", optional = true }
-oxc_semantic = { version = "0.143", optional = true }
-oxc_resolver = { version = "11", optional = true }
-oxc_span = { version = "0.143", optional = true }
-oxc_syntax = { version = "0.143", optional = true }
-ra_ap_base_db = { version = "0.0.345", optional = true }
-ra_ap_hir = { version = "0.0.345", optional = true }
-ra_ap_ide_db = { version = "0.0.345", optional = true }
-ra_ap_paths = { version = "0.0.345", optional = true }
-ra_ap_project_model = { version = "0.0.345", optional = true }
-ra_ap_span = { version = "0.0.345", optional = true }
-ra_ap_syntax = { version = "0.0.345", optional = true }
-ra_ap_vfs = { version = "0.0.345", optional = true }
 tree-sitter-go = "0.23.0"
 
 [features]
-default = ["rust", "typescript", "serialize", "full-analysis", "oxc"]
+default = ["rust", "typescript", "serialize", "full-analysis"]
 rust = ["dep:tree-sitter-rust"]
 typescript = ["dep:tree-sitter-typescript", "dep:tree-sitter-javascript"]
 python = ["dep:tree-sitter-python"]
 html = ["dep:tree-sitter-html"]
 serialize = ["dep:serde", "dep:serde_json", "dep:bincode", "dep:blake3"]
 full-analysis = []
-oxc = [
-    "dep:oxc_allocator",
-    "dep:oxc_ast",
-    "dep:oxc_ast_visit",
-    "dep:oxc_parser",
-    "dep:oxc_semantic",
-    "dep:oxc_resolver",
-    "dep:oxc_span",
-    "dep:oxc_syntax",
-]
-rust-hir = [
-    "dep:ra_ap_base_db",
-    "dep:ra_ap_hir",
-    "dep:ra_ap_ide_db",
-    "dep:ra_ap_paths",
-    "dep:ra_ap_project_model",
-    "dep:ra_ap_span",
-    "dep:ra_ap_syntax",
-    "dep:ra_ap_vfs",
-]
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = 'dump_filter'
+path = 'dump_filter.rs'
+
+
+[[bin]]
+name = 'dump_filter2'
+path = 'dump_filter2.rs'
+
+
+[[bin]]
+name = 'dump_filter3'
+path = 'dump_filter3.rs'
+

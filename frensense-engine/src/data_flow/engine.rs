@@ -14,9 +14,9 @@ pub struct FunctionTaintSummary {
 
 #[derive(Debug, Clone, Default)]
 pub struct DataFlowEngine {
-    summaries: FxHashMap<(String, String), FunctionTaintSummary>,
-    global_taint: FxHashMap<(String, String), TaintOrigin>,
-    global_field_taint: FxHashMap<(String, String, String), TaintOrigin>,
+    summaries: FxHashMap<String, FxHashMap<String, FunctionTaintSummary>>,
+    global_taint: FxHashMap<String, FxHashMap<String, TaintOrigin>>,
+    global_field_taint: FxHashMap<String, FxHashMap<(String, String), TaintOrigin>>,
 }
 
 impl DataFlowEngine {
@@ -26,7 +26,9 @@ impl DataFlowEngine {
 
     pub fn register_global_taint(&mut self, file_path: &str, var_name: &str, origin: TaintOrigin) {
         self.global_taint
-            .insert((file_path.to_string(), var_name.to_string()), origin);
+            .entry(file_path.to_string())
+            .or_default()
+            .insert(var_name.to_string(), origin);
     }
 
     pub fn register_global_field_taint(
@@ -36,20 +38,14 @@ impl DataFlowEngine {
         field: &str,
         origin: TaintOrigin,
     ) {
-        self.global_field_taint.insert(
-            (
-                file_path.to_string(),
-                var_name.to_string(),
-                field.to_string(),
-            ),
-            origin,
-        );
+        self.global_field_taint
+            .entry(file_path.to_string())
+            .or_default()
+            .insert((var_name.to_string(), field.to_string()), origin);
     }
 
     pub fn get_global_taint(&self, file_path: &str, var_name: &str) -> Option<TaintOrigin> {
-        self.global_taint
-            .get(&(file_path.to_string(), var_name.to_string()))
-            .cloned()
+        self.global_taint.get(file_path)?.get(var_name).cloned()
     }
 
     pub fn get_global_field_taint(
@@ -59,23 +55,19 @@ impl DataFlowEngine {
         field: &str,
     ) -> Option<TaintOrigin> {
         self.global_field_taint
-            .get(&(
-                file_path.to_string(),
-                var_name.to_string(),
-                field.to_string(),
-            ))
+            .get(file_path)?
+            .get(&(var_name.to_string(), field.to_string()))
             .cloned()
     }
 
     pub fn seed_registry_from_globals(&self, file_path: &str, registry: &mut TaintRegistry) {
-        let fp = file_path.to_string();
-        for ((f, var), origin) in &self.global_taint {
-            if *f == fp {
+        if let Some(taints) = self.global_taint.get(file_path) {
+            for (var, origin) in taints {
                 registry.taint(var, origin.clone());
             }
         }
-        for ((f, var, field), origin) in &self.global_field_taint {
-            if *f == fp {
+        if let Some(field_taints) = self.global_field_taint.get(file_path) {
+            for ((var, field), origin) in field_taints {
                 registry.taint_field(var, field, origin.clone());
             }
         }
@@ -88,7 +80,9 @@ impl DataFlowEngine {
         summary: FunctionTaintSummary,
     ) {
         self.summaries
-            .insert((file_path.to_string(), function_name.to_string()), summary);
+            .entry(file_path.to_string())
+            .or_default()
+            .insert(function_name.to_string(), summary);
     }
 
     pub fn get_summary(
@@ -96,8 +90,7 @@ impl DataFlowEngine {
         file_path: &str,
         function_name: &str,
     ) -> Option<&FunctionTaintSummary> {
-        self.summaries
-            .get(&(file_path.to_string(), function_name.to_string()))
+        self.summaries.get(file_path)?.get(function_name)
     }
 
     pub fn cache_taint_summary_from_registry(
@@ -127,10 +120,9 @@ impl DataFlowEngine {
     }
 
     pub fn invalidate_file(&mut self, file_path: &str) {
-        let fp = file_path.to_string();
-        self.summaries.retain(|(f, _), _| f != &fp);
-        self.global_taint.retain(|(f, _), _| f != &fp);
-        self.global_field_taint.retain(|(f, _, _), _| f != &fp);
+        self.summaries.remove(file_path);
+        self.global_taint.remove(file_path);
+        self.global_field_taint.remove(file_path);
     }
 }
 

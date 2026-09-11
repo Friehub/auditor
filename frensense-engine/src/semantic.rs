@@ -206,7 +206,7 @@ impl HirTypeMap {
 /// of these is user input, and a function with such a parameter is an HTTP
 /// handler. This list grows only when a new framework is adopted, not when a
 /// new method name exists inside any framework.
-pub(crate) const HTTP_FRAMEWORK_PACKAGES: &[&str] = &[
+pub const HTTP_FRAMEWORK_PACKAGES: &[&str] = &[
     "express", "fastify", "koa", "hapi", "hono", "next", "nuxt", "h3", "polka", "elysia", "nest",
 ];
 
@@ -269,19 +269,54 @@ static HTTP_FRAMEWORK_SET: std::sync::LazyLock<FxHashSet<&'static str>> =
 
 /// Map a package name to the sink category of anything imported from it.
 /// O(1) lookup via [`PACKAGE_SINK_MAP`].
-pub(crate) fn package_sink_category(pkg: &str) -> Option<SinkCategory> {
+pub fn package_sink_category(pkg: &str) -> Option<SinkCategory> {
     PACKAGE_SINK_MAP.get(pkg).copied()
 }
 
+/// Map a package name to its sink category using the language spec when
+/// available, falling back to the hardcoded [`package_sink_category`] table.
+pub fn package_sink_category_from_spec(
+    pkg: &str,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) -> Option<SinkCategory> {
+    if let Some(s) = spec {
+        match s.package_category(pkg)? {
+            frensense_lang::PackageCategory::SqlDatabase => Some(SinkCategory::SqlInjection),
+            frensense_lang::PackageCategory::NoSqlDatabase => Some(SinkCategory::NoSqlInjection),
+            frensense_lang::PackageCategory::HttpClient => Some(SinkCategory::Ssrf),
+            frensense_lang::PackageCategory::TemplateEngine => Some(SinkCategory::Xss),
+            frensense_lang::PackageCategory::CommandExecution => {
+                Some(SinkCategory::CommandInjection)
+            }
+            frensense_lang::PackageCategory::FileSystem => Some(SinkCategory::PathTraversal),
+            frensense_lang::PackageCategory::Deserialization => Some(SinkCategory::CodeExecution),
+            _ => None,
+        }
+    } else {
+        package_sink_category(pkg)
+    }
+}
+
 /// Returns true if the package name belongs to a known HTTP framework.
-/// O(1) lookup via [`HTTP_FRAMEWORK_SET`].
-pub(crate) fn is_http_framework_package(pkg: &str) -> bool {
-    HTTP_FRAMEWORK_SET.contains(pkg)
+/// Uses the language spec when available, falling back to the hardcoded
+/// [`HTTP_FRAMEWORK_SET`].
+pub(crate) fn is_http_framework_package(
+    pkg: &str,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) -> bool {
+    if let Some(s) = spec {
+        matches!(
+            s.package_category(pkg),
+            Some(frensense_lang::PackageCategory::HttpFramework)
+        )
+    } else {
+        HTTP_FRAMEWORK_SET.contains(pkg)
+    }
 }
 
 /// Extract the base type name from a possibly-parameterized annotation.
 /// `"Request"` → `"Request"`, `"Json<User>"` → `"Json"`, `"express.Request"` → `"Request"`.
-pub(crate) fn base_type_name(annotation: &str) -> &str {
+pub fn base_type_name(annotation: &str) -> &str {
     let trimmed = annotation
         .trim()
         .trim_start_matches(|c: char| c == ':' || c.is_whitespace());
@@ -301,11 +336,23 @@ pub(crate) fn base_type_name(annotation: &str) -> &str {
 ///
 /// Constructed per file: it owns that file's [`ImportMap`] and shares the
 /// corpus registry via [`Arc`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ImportMapProvider {
     import_map: ImportMap,
     source_sink: Arc<CorpusSourceSinkRegistry>,
     environment: Option<crate::context::Environment>,
+    spec: Option<Arc<dyn frensense_lang::LanguageSpec>>,
+}
+
+impl std::fmt::Debug for ImportMapProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportMapProvider")
+            .field("import_map", &self.import_map)
+            .field("source_sink", &self.source_sink)
+            .field("environment", &self.environment)
+            .field("spec", &self.spec.as_ref().map(|s| s.name()))
+            .finish()
+    }
 }
 
 impl ImportMapProvider {
@@ -323,6 +370,26 @@ impl ImportMapProvider {
             import_map,
             source_sink,
             environment,
+            spec: None,
+        }
+    }
+
+    /// Build an import-map-backed provider with a language spec.
+    ///
+    /// When a spec is available, the provider delegates package classification
+    /// and source/sink knowledge to the spec instead of using hardcoded tables.
+    #[must_use]
+    pub fn with_spec(
+        import_map: ImportMap,
+        source_sink: Arc<CorpusSourceSinkRegistry>,
+        environment: Option<crate::context::Environment>,
+        spec: Arc<dyn frensense_lang::LanguageSpec>,
+    ) -> Self {
+        Self {
+            import_map,
+            source_sink,
+            environment,
+            spec: Some(spec),
         }
     }
 
@@ -347,13 +414,18 @@ impl SemanticProvider for ImportMapProvider {
         if let Some(annotation) = type_annotation {
             let base = base_type_name(annotation);
             if let Some(package) = self.import_map.resolve(base)
-                && is_http_framework_package(package)
+                && is_http_framework_package(package, self.spec.as_deref())
             {
                 return Some(TaintOrigin::UserInput);
             }
         }
-        // 3. Fall back to name matching for unannotated parameters.
-        crate::data_flow::classify_param_name_in_context(name, self.environment.as_ref())
+        // 3. Fall back to name matching for unannotated parameters, delegating
+        //    to the language spec when available for per-language taint origins.
+        crate::data_flow::classify_param_name_in_context_with_spec(
+            name,
+            self.environment.as_ref(),
+            self.spec.as_deref(),
+        )
     }
 
     fn classify_sink(
@@ -366,13 +438,13 @@ impl SemanticProvider for ImportMapProvider {
         //    "query" ever having to appear in a sink list.
         if let Some(receiver) = call_text.split('.').next()
             && let Some(package) = self.import_map.resolve(receiver)
-            && let Some(category) = package_sink_category(package)
+            && let Some(category) = package_sink_category_from_spec(package, self.spec.as_deref())
         {
             return Some(category);
         }
         // 2. A fully-qualified module (when the caller knows it) works the same way.
         if let Some(module) = resolved_module
-            && let Some(category) = package_sink_category(module)
+            && let Some(category) = package_sink_category_from_spec(module, self.spec.as_deref())
         {
             return Some(category);
         }
@@ -388,13 +460,13 @@ impl SemanticProvider for ImportMapProvider {
             type_context
                 .import_map
                 .resolve(annotation)
-                .is_some_and(is_http_framework_package)
+                .is_some_and(|p| is_http_framework_package(p, self.spec.as_deref()))
         });
         if type_confirmed {
             return true;
         }
         // Fall back to the ≥2 heuristic signals for untyped code.
-        crate::function_role::classify_role_with_imports(fp, Some(type_context.import_map))
+        crate::function_role::classify_role_with_imports(fp, Some(type_context.import_map), None)
             == crate::function_role::FunctionRole::HttpHandler
     }
 
@@ -410,13 +482,22 @@ impl SemanticProvider for ImportMapProvider {
     }
 
     fn known_sink_names(&self) -> Vec<(&'static str, SinkCategory)> {
-        // ImportMapProvider uses the same hardcoded list as before — these are
-        // the fallback sinks when OXC is not available.
-        crate::corpus::source_sink::always_register_sinks_with_categories()
+        if let Some(s) = self.spec.as_deref() {
+            s.known_sink_names()
+                .iter()
+                .map(|&(name, _desc)| (name, SinkCategory::from_sink_name(name)))
+                .collect()
+        } else {
+            crate::corpus::source_sink::always_register_sinks_with_categories()
+        }
     }
 
     fn known_source_patterns(&self) -> Vec<&'static str> {
-        crate::corpus::source_sink::always_register_source_patterns()
+        if let Some(s) = self.spec.as_deref() {
+            s.known_source_patterns().to_vec()
+        } else {
+            crate::corpus::source_sink::always_register_source_patterns()
+        }
     }
 }
 

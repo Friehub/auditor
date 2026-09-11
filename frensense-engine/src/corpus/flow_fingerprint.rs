@@ -12,6 +12,7 @@ use std::hash::{Hash, Hasher};
 use tree_sitter::Node;
 
 use crate::corpus::motifs::MOTIF_LOOKUP;
+use frensense_lang::spec::{LanguageSpec, NodeRole};
 
 /// A source-to-sink path represented as a sequence of abstract node labels.
 #[derive(Debug, Clone)]
@@ -43,11 +44,12 @@ pub fn extract_flow_paths(
     body: Node<'_>,
     source: &str,
     import_map: Option<&crate::import_resolver::ImportMap>,
+    spec: Option<&dyn LanguageSpec>,
 ) -> Vec<u64> {
     let lookup = &*MOTIF_LOOKUP;
 
     // Step 1: collect all identifiers that are assigned from a source motif
-    let tainted_vars = collect_tainted_vars(body, source, lookup, import_map);
+    let tainted_vars = collect_tainted_vars(body, source, lookup, import_map, spec);
     if tainted_vars.is_empty() {
         return Vec::new();
     }
@@ -60,6 +62,7 @@ pub fn extract_flow_paths(
         &tainted_vars,
         lookup,
         import_map,
+        spec,
         &mut path_hashes,
     );
 
@@ -75,9 +78,10 @@ fn collect_tainted_vars(
     source: &str,
     lookup: &FxHashMap<String, &'static str>,
     import_map: Option<&crate::import_resolver::ImportMap>,
+    spec: Option<&dyn LanguageSpec>,
 ) -> FxHashMap<String, &'static str> {
     let mut tainted: FxHashMap<String, &'static str> = FxHashMap::default();
-    collect_tainted_recursive(node, source, lookup, import_map, &mut tainted);
+    collect_tainted_recursive(node, source, lookup, import_map, spec, &mut tainted);
     tainted
 }
 
@@ -86,31 +90,89 @@ fn collect_tainted_recursive(
     source: &str,
     lookup: &FxHashMap<String, &'static str>,
     import_map: Option<&crate::import_resolver::ImportMap>,
+    spec: Option<&dyn LanguageSpec>,
     tainted: &mut FxHashMap<String, &'static str>,
 ) {
     let kind = node.kind();
+    let is_decl_or_assign = spec.map_or(
+        kind == "variable_declarator" || kind == "assignment_expression",
+        |s| {
+            matches!(
+                s.classify(kind),
+                NodeRole::Declaration { .. } | NodeRole::Assignment { .. }
+            )
+        },
+    );
 
     // Variable declaration with initializer: `let cmd = req.body.cmd`
-    if kind == "variable_declarator" || kind == "assignment_expression" {
-        if let (Some(name_node), Some(value_node)) = (
-            node.child_by_field_name("name")
-                .or_else(|| node.child_by_field_name("left")),
-            node.child_by_field_name("value")
-                .or_else(|| node.child_by_field_name("right")),
-        ) {
-            let var_name = &source[name_node.start_byte()..name_node.end_byte()];
-
-            // Only treat the RHS as a source when a member actually appears as a
-            // reference node (identifier / member-expression / scoped identifier),
-            // never as a substring inside a string literal. `let msg = "log
-            // req.body ..."` must NOT mark `msg` tainted.
-            if rhs_references_source(value_node, source, lookup) {
-                tainted.insert(var_name.to_string(), "UserInputSource");
-            } else if let Some(cat) = rhs_is_sink_call(value_node, source, lookup, import_map) {
-                if cat == crate::corpus::source_sink::SinkCategory::SqlInjection
-                    || cat == crate::corpus::source_sink::SinkCategory::NoSqlInjection
+    if is_decl_or_assign {
+        if let Some(s) = spec {
+            match s.classify(kind) {
+                NodeRole::Declaration {
+                    name_field,
+                    value_field,
+                } => {
+                    if let (Some(name_node), Some(value_node)) = (
+                        node.child_by_field_name(name_field),
+                        node.child_by_field_name(value_field),
+                    ) {
+                        let var_name = &source[name_node.start_byte()..name_node.end_byte()];
+                        if rhs_references_source(value_node, source, lookup, spec) {
+                            tainted.insert(var_name.to_string(), "UserInputSource");
+                        } else if let Some(cat) =
+                            rhs_is_sink_call(value_node, source, lookup, import_map, spec)
+                        {
+                            if cat == crate::corpus::source_sink::SinkCategory::SqlInjection
+                                || cat == crate::corpus::source_sink::SinkCategory::NoSqlInjection
+                            {
+                                tainted.insert(var_name.to_string(), "DatabaseSource");
+                            }
+                        }
+                    }
+                }
+                NodeRole::Assignment {
+                    lhs_field,
+                    rhs_field,
+                } => {
+                    if let (Some(name_node), Some(value_node)) = (
+                        node.child_by_field_name(lhs_field),
+                        node.child_by_field_name(rhs_field),
+                    ) {
+                        let var_name = &source[name_node.start_byte()..name_node.end_byte()];
+                        if rhs_references_source(value_node, source, lookup, spec) {
+                            tainted.insert(var_name.to_string(), "UserInputSource");
+                        } else if let Some(cat) =
+                            rhs_is_sink_call(value_node, source, lookup, import_map, spec)
+                        {
+                            if cat == crate::corpus::source_sink::SinkCategory::SqlInjection
+                                || cat == crate::corpus::source_sink::SinkCategory::NoSqlInjection
+                            {
+                                tainted.insert(var_name.to_string(), "DatabaseSource");
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            // Fallback: raw kind matching when no spec is available
+            if let (Some(name_node), Some(value_node)) = (
+                node.child_by_field_name("name")
+                    .or_else(|| node.child_by_field_name("left")),
+                node.child_by_field_name("value")
+                    .or_else(|| node.child_by_field_name("right")),
+            ) {
+                let var_name = &source[name_node.start_byte()..name_node.end_byte()];
+                if rhs_references_source(value_node, source, lookup, spec) {
+                    tainted.insert(var_name.to_string(), "UserInputSource");
+                } else if let Some(cat) =
+                    rhs_is_sink_call(value_node, source, lookup, import_map, spec)
                 {
-                    tainted.insert(var_name.to_string(), "DatabaseSource");
+                    if cat == crate::corpus::source_sink::SinkCategory::SqlInjection
+                        || cat == crate::corpus::source_sink::SinkCategory::NoSqlInjection
+                    {
+                        tainted.insert(var_name.to_string(), "DatabaseSource");
+                    }
                 }
             }
         }
@@ -119,7 +181,7 @@ fn collect_tainted_recursive(
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            collect_tainted_recursive(cursor.node(), source, lookup, import_map, tainted);
+            collect_tainted_recursive(cursor.node(), source, lookup, import_map, spec, tainted);
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -133,9 +195,18 @@ fn rhs_is_sink_call(
     source: &str,
     lookup: &FxHashMap<String, &'static str>,
     import_map: Option<&crate::import_resolver::ImportMap>,
+    spec: Option<&dyn LanguageSpec>,
 ) -> Option<crate::corpus::source_sink::SinkCategory> {
-    if node.kind() == "call_expression" {
-        if let Some(func) = node.child_by_field_name("function") {
+    let is_call = spec.map_or(node.kind() == "call_expression", |s| {
+        matches!(s.classify(node.kind()), NodeRole::Call { .. })
+    });
+
+    if is_call {
+        let callee_field = spec.and_then(|s| match s.classify(node.kind()) {
+            NodeRole::Call { callee_field, .. } => Some(callee_field),
+            _ => None,
+        });
+        if let Some(func) = node.child_by_field_name(callee_field.unwrap_or("function")) {
             let call_name = &source[func.start_byte()..func.end_byte()];
 
             // Resolve to motif
@@ -158,7 +229,9 @@ fn rhs_is_sink_call(
             if let Some(imap) = import_map {
                 if let Some(receiver) = call_name.split('.').next() {
                     if let Some(pkg) = imap.resolve(receiver) {
-                        if let Some(cat) = crate::semantic::package_sink_category(pkg) {
+                        if let Some(cat) =
+                            crate::semantic::package_sink_category_from_spec(pkg, spec)
+                        {
                             return Some(cat);
                         }
                     }
@@ -168,11 +241,15 @@ fn rhs_is_sink_call(
     }
 
     // Check if it's an await expression wrapping a call
-    if node.kind() == "await_expression" {
+    let is_await = spec.map_or(node.kind() == "await_expression", |s| {
+        matches!(s.classify(node.kind()), NodeRole::Await)
+    });
+    if is_await {
         let mut cursor = node.walk();
         if cursor.goto_first_child() {
             loop {
-                if let Some(cat) = rhs_is_sink_call(cursor.node(), source, lookup, import_map) {
+                if let Some(cat) = rhs_is_sink_call(cursor.node(), source, lookup, import_map, spec)
+                {
                     return Some(cat);
                 }
                 if !cursor.goto_next_sibling() {
@@ -191,6 +268,7 @@ fn rhs_references_source(
     node: Node<'_>,
     source: &str,
     lookup: &FxHashMap<String, &'static str>,
+    spec: Option<&dyn LanguageSpec>,
 ) -> bool {
     let kind = node.kind();
 
@@ -218,15 +296,25 @@ fn rhs_references_source(
 
     // Reference nodes: an identifier or a member/scoped expression whose exact
     // source text matches a registered UserInputSource member.
-    if matches!(
-        kind,
-        "identifier"
-            | "member_expression"
-            | "scoped_identifier"
-            | "subscript_expression"
-            | "field_identifier"
-            | "property_identifier"
-    ) {
+    let is_ref = spec.map_or(
+        matches!(
+            kind,
+            "identifier"
+                | "member_expression"
+                | "scoped_identifier"
+                | "subscript_expression"
+                | "field_identifier"
+                | "property_identifier"
+        ),
+        |s| {
+            matches!(
+                s.classify(kind),
+                NodeRole::Identifier | NodeRole::MemberAccess { .. }
+            )
+        },
+    );
+
+    if is_ref {
         let text = &source[node.start_byte()..node.end_byte()];
         if let Some(&motif) = lookup.get(text) {
             if motif == "UserInputSource" {
@@ -238,7 +326,7 @@ fn rhs_references_source(
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            if rhs_references_source(cursor.node(), source, lookup) {
+            if rhs_references_source(cursor.node(), source, lookup, spec) {
                 return true;
             }
             if !cursor.goto_next_sibling() {
@@ -298,10 +386,19 @@ fn find_sink_paths(
     tainted: &FxHashMap<String, &'static str>,
     lookup: &FxHashMap<String, &'static str>,
     import_map: Option<&crate::import_resolver::ImportMap>,
+    spec: Option<&dyn LanguageSpec>,
     out: &mut FxHashSet<u64>,
 ) {
-    if node.kind() == "call_expression" {
-        if let Some(func) = node.child_by_field_name("function") {
+    let is_call = spec.map_or(node.kind() == "call_expression", |s| {
+        matches!(s.classify(node.kind()), NodeRole::Call { .. })
+    });
+
+    if is_call {
+        let callee_field = spec.and_then(|s| match s.classify(node.kind()) {
+            NodeRole::Call { callee_field, .. } => Some(callee_field),
+            _ => None,
+        });
+        if let Some(func) = node.child_by_field_name(callee_field.unwrap_or("function")) {
             let call_name = &source[func.start_byte()..func.end_byte()];
             // Resolve to motif
             let mut sink_motif = lookup.get(call_name).copied().or_else(|| {
@@ -316,7 +413,9 @@ fn find_sink_paths(
                 if let Some(imap) = import_map {
                     if let Some(receiver) = call_name.split('.').next() {
                         if let Some(pkg) = imap.resolve(receiver) {
-                            if let Some(cat) = crate::semantic::package_sink_category(pkg) {
+                            if let Some(cat) =
+                                crate::semantic::package_sink_category_from_spec(pkg, spec)
+                            {
                                 sink_motif = match cat {
                                     crate::corpus::source_sink::SinkCategory::SqlInjection => {
                                         Some("SqlSink")
@@ -363,7 +462,15 @@ fn find_sink_paths(
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            find_sink_paths(cursor.node(), source, tainted, lookup, import_map, out);
+            find_sink_paths(
+                cursor.node(),
+                source,
+                tainted,
+                lookup,
+                import_map,
+                spec,
+                out,
+            );
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -386,7 +493,7 @@ mod tests {
     fn tainted_vars(code: &str) -> FxHashMap<String, &'static str> {
         let tree = parse_ts(code);
         let lookup = &*crate::corpus::motifs::MOTIF_LOOKUP;
-        collect_tainted_vars(tree.root_node(), code, lookup, None)
+        collect_tainted_vars(tree.root_node(), code, lookup, None, None)
     }
 
     #[test]
@@ -433,10 +540,18 @@ function handler() {
         let code = "function handler() { let cmd = req.body.command; exec(\"cmd was executed\"); }";
         let tree = parse_ts(code);
         let lookup = &*crate::corpus::motifs::MOTIF_LOOKUP;
-        let tainted = collect_tainted_vars(tree.root_node(), code, lookup, None);
+        let tainted = collect_tainted_vars(tree.root_node(), code, lookup, None, None);
         assert_eq!(tainted.get("cmd"), Some(&"UserInputSource"));
         let mut hashes = FxHashSet::default();
-        find_sink_paths(tree.root_node(), code, &tainted, lookup, None, &mut hashes);
+        find_sink_paths(
+            tree.root_node(),
+            code,
+            &tainted,
+            lookup,
+            None,
+            None,
+            &mut hashes,
+        );
         assert!(
             hashes.is_empty(),
             "string-literal arg must not produce a flow path, got {hashes:?}"
@@ -448,9 +563,17 @@ function handler() {
         let code = "function handler() { let cmd = req.body.command; exec(cmd); }";
         let tree = parse_ts(code);
         let lookup = &*crate::corpus::motifs::MOTIF_LOOKUP;
-        let tainted = collect_tainted_vars(tree.root_node(), code, lookup, None);
+        let tainted = collect_tainted_vars(tree.root_node(), code, lookup, None, None);
         let mut hashes = FxHashSet::default();
-        find_sink_paths(tree.root_node(), code, &tainted, lookup, None, &mut hashes);
+        find_sink_paths(
+            tree.root_node(),
+            code,
+            &tainted,
+            lookup,
+            None,
+            None,
+            &mut hashes,
+        );
         assert_eq!(
             hashes.len(),
             1,

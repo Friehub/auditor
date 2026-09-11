@@ -572,13 +572,6 @@ impl<'a> CrossFileVerifier<'a> {
 
         let fn_name_full = &self.source[callee.start_byte()..callee.end_byte()];
 
-        let mut fn_name_field = fn_name_full;
-        if callee.kind() == "member_expression" || callee.kind() == "field_expression" {
-            if let Some(field) = callee.child_by_field_name("field") {
-                fn_name_field = &self.source[field.start_byte()..field.end_byte()];
-            }
-        }
-
         // Apply safe-base filtering to avoid false positives on native objects
         if fn_name_full.starts_with("Object.")
             || fn_name_full.starts_with("Array.")
@@ -928,19 +921,30 @@ impl<'a> CrossFileVerifier<'a> {
             "member_expression" | "field_expression" => {
                 // Check reaching-definitions first
                 let full_name = &self.source[node.start_byte()..node.end_byte()];
+                if self.defs.is_tainted(full_name) || self.registry.is_tainted(full_name) {
+                    return true;
+                }
                 if let Some(object) = node.child_by_field_name("object").or_else(|| node.child(0)) {
                     let object_name = &self.source[object.start_byte()..object.end_byte()];
                     if self.defs.is_member_tainted(full_name, object_name) {
                         return true;
                     }
                 }
-                // Fall back to registry
-                if self.registry.is_tainted(full_name) {
-                    return true;
-                }
-                // Also check just the object (e.g. if `this` itself is tainted)
-                if let Some(object) = node.child_by_field_name("object").or_else(|| node.child(0)) {
-                    return self.is_node_tainted(object);
+                // Walk up the member-expression ancestor chain and check each prefix.
+                // Resolves e.g. `req.body.login` when defs/registry contain `req.body` or `req`.
+                let mut cur = node;
+                loop {
+                    let obj = cur.child_by_field_name("object").or_else(|| cur.child(0));
+                    let Some(obj) = obj else { break };
+                    let prefix = &self.source[obj.start_byte()..obj.end_byte()];
+                    if self.defs.is_tainted(prefix) || self.registry.is_tainted(prefix) {
+                        return true;
+                    }
+                    if matches!(obj.kind(), "member_expression" | "field_expression") {
+                        cur = obj;
+                    } else {
+                        break;
+                    }
                 }
                 false
             }

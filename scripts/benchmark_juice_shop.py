@@ -80,7 +80,7 @@ with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
 
 try:
     result = subprocess.run(
-        [FRENSENSE_BIN] + scan_paths + ["--json"],
+        [FRENSENSE_BIN] + scan_paths + ["--use-compiler", "--json"],
         capture_output=True,
         text=True,
         timeout=600,
@@ -114,9 +114,16 @@ pattern_stats: dict[str, dict] = defaultdict(lambda: {"TP": 0, "FP": 0})
 total_tp = 0
 total_fp = 0
 
+# Filter for actual semantic vulnerability classes
+STRICT_PREFIXES = ("CORPUS_TS_IDOR", "CORPUS_TS_SQLI", "CORPUS_TS_NOSQLI", "CORPUS_TS_CMDI", "CORPUS_TS_XSS", "CORPUS_TS_SSRF", "CORPUS_TS_PATH_TRAVERSAL")
+
 for adv in advisories:
     file_path = adv.get("file_path", "")
     rule_id = adv.get("rule_id", "UNKNOWN")
+
+    # Only evaluate high-signal semantic rules
+    if not rule_id.startswith(STRICT_PREFIXES):
+        continue
 
     if file_path in vuln_files:
         pattern_stats[rule_id]["TP"] += 1

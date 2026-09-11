@@ -3,6 +3,9 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use tree_sitter::Node;
 
+use frensense_lang::NodeRole;
+use frensense_lang::spec_for_ext;
+
 use crate::cfg::{BasicBlock, ControlFlowGraph};
 
 #[derive(Debug, Clone)]
@@ -86,6 +89,69 @@ fn find_var_name(node: Node, source: &str) -> Option<String> {
     }
 }
 
+fn extract_uses(
+    node: Node,
+    source: &str,
+    block_id: usize,
+    node_counter: &mut usize,
+    uses: &mut Vec<Use>,
+) {
+    match node.kind() {
+        "identifier" | "shorthand_property_identifier" => {
+            let name = source[node.start_byte()..node.end_byte()].to_string();
+            uses.push(Use {
+                name,
+                block_id,
+                node: *node_counter,
+                start_byte: node.start_byte(),
+                end_byte: node.end_byte(),
+            });
+            *node_counter += 1;
+        }
+        "member_expression" | "field_expression" => {
+            let name = source[node.start_byte()..node.end_byte()].to_string();
+            uses.push(Use {
+                name,
+                block_id,
+                node: *node_counter,
+                start_byte: node.start_byte(),
+                end_byte: node.end_byte(),
+            });
+            *node_counter += 1;
+
+            if let Some(obj) = node.child_by_field_name("object") {
+                extract_uses(obj, source, block_id, node_counter, uses);
+            }
+        }
+        "call_expression" => {
+            if let Some(func) = node.child_by_field_name("function") {
+                extract_uses(func, source, block_id, node_counter, uses);
+            }
+            if let Some(args) = node.child_by_field_name("arguments") {
+                for i in 0..args.child_count() {
+                    if let Some(arg) = args.child(i) {
+                        extract_uses(arg, source, block_id, node_counter, uses);
+                    }
+                }
+            }
+        }
+        "pair" => {
+            if let Some(val) = node.child_by_field_name("value") {
+                extract_uses(val, source, block_id, node_counter, uses);
+            }
+        }
+        "property_identifier" => {}
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.is_named() {
+                    extract_uses(child, source, block_id, node_counter, uses);
+                }
+            }
+        }
+    }
+}
+
 fn is_identifier(node: Node) -> bool {
     node.kind() == "identifier"
 }
@@ -108,6 +174,12 @@ fn extract_ref_names(node: Node, source: &str, names: &mut Vec<String>) {
             }
         }
         "member_expression" | "field_expression" => {
+            // Keep the full field path instead of stripping it!
+            names.push(source[node.start_byte()..node.end_byte()].to_string());
+
+            // We ALSO want to record a use of the base object, because reading req.body
+            // is technically also a read of req. But for exact field-sensitive taint,
+            // the full path is the most precise. Let's just use the full path.
             if let Some(obj) = node.child_by_field_name("object") {
                 extract_ref_names(obj, source, names);
             }
@@ -170,11 +242,40 @@ fn scan_statement_def_uses(
     definitions: &mut Vec<Definition>,
     uses: &mut Vec<Use>,
     node_counter: &mut usize,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
 ) {
     let kind = node.kind();
 
-    match kind {
-        "let_declaration" | "lexical_declaration" | "variable_declaration" => {
+    let matched = spec.map(|s| s.classify(kind));
+
+    match matched {
+        Some(NodeRole::Function {
+            is_method: _,
+            name_field: _,
+            params_field,
+            body_field: _,
+        }) => {
+            if let Some(params) = node.child_by_field_name(params_field) {
+                let mut cursor = params.walk();
+                for child in params.children(&mut cursor) {
+                    if child.is_named() && !matches!(child.kind(), "," | "(" | ")" | "[" | "]") {
+                        let mut names = Vec::new();
+                        collect_binding_names_from_pattern(child, source, &mut names);
+                        for name in names {
+                            definitions.push(Definition {
+                                name,
+                                block_id,
+                                node: *node_counter,
+                                start_byte: child.start_byte(),
+                                end_byte: child.end_byte(),
+                            });
+                            *node_counter += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Some(NodeRole::Declaration { .. }) => {
             if let Some(pattern) = node.child_by_field_name("pattern") {
                 let mut names = Vec::new();
                 collect_binding_names_from_pattern(pattern, source, &mut names);
@@ -188,8 +289,33 @@ fn scan_statement_def_uses(
                     });
                     *node_counter += 1;
                 }
+            } else if let Some(left) = node.child_by_field_name("left") {
+                if let Some(name) = find_var_name(left, source) {
+                    definitions.push(Definition {
+                        name,
+                        block_id,
+                        node: *node_counter,
+                        start_byte: left.start_byte(),
+                        end_byte: left.end_byte(),
+                    });
+                    *node_counter += 1;
+                }
+            } else if let Some(name_node) = node.child_by_field_name("name") {
+                if let Some(name) = find_var_name(name_node, source) {
+                    definitions.push(Definition {
+                        name,
+                        block_id,
+                        node: *node_counter,
+                        start_byte: name_node.start_byte(),
+                        end_byte: name_node.end_byte(),
+                    });
+                    *node_counter += 1;
+                }
             }
-            if let Some(value) = node.child_by_field_name("value") {
+            if let Some(value) = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("right"))
+            {
                 let mut refs = Vec::new();
                 extract_ref_names(value, source, &mut refs);
                 for r in refs {
@@ -204,7 +330,7 @@ fn scan_statement_def_uses(
                 }
             }
         }
-        "assignment_expression" | "assignment" => {
+        Some(NodeRole::Assignment { .. }) => {
             if let Some(left) = node.child_by_field_name("left") {
                 if let Some(name) = find_var_name(left, source) {
                     definitions.push(Definition {
@@ -232,7 +358,7 @@ fn scan_statement_def_uses(
                 }
             }
         }
-        "call_expression" => {
+        Some(NodeRole::Call { .. }) => {
             if let Some(func) = node.child_by_field_name("function") {
                 let func_name = source[func.start_byte()..func.end_byte()].to_string();
                 uses.push(Use {
@@ -247,22 +373,12 @@ fn scan_statement_def_uses(
             if let Some(args) = node.child_by_field_name("arguments") {
                 for i in 0..args.child_count() {
                     if let Some(arg) = args.child(i) {
-                        if is_identifier(arg) {
-                            let arg_name = source[arg.start_byte()..arg.end_byte()].to_string();
-                            uses.push(Use {
-                                name: arg_name,
-                                block_id,
-                                node: *node_counter,
-                                start_byte: arg.start_byte(),
-                                end_byte: arg.end_byte(),
-                            });
-                            *node_counter += 1;
-                        }
+                        extract_uses(arg, source, block_id, node_counter, uses);
                     }
                 }
             }
         }
-        "return_statement" | "return_expression" => {
+        Some(NodeRole::Return) => {
             if let Some(value) = node.child_by_field_name("value") {
                 let mut refs = Vec::new();
                 extract_ref_names(value, source, &mut refs);
@@ -278,7 +394,73 @@ fn scan_statement_def_uses(
                 }
             }
         }
-        _ => {}
+        _ => {
+            // Fallback: raw kind matching when spec is None or kind doesn't classify
+            match kind {
+                "let_declaration" | "lexical_declaration" | "variable_declaration" => {
+                    if let Some(pattern) = node.child_by_field_name("pattern") {
+                        let mut names = Vec::new();
+                        collect_binding_names_from_pattern(pattern, source, &mut names);
+                        for name in names {
+                            definitions.push(Definition {
+                                name,
+                                block_id,
+                                node: *node_counter,
+                                start_byte: pattern.start_byte(),
+                                end_byte: pattern.end_byte(),
+                            });
+                            *node_counter += 1;
+                        }
+                    }
+                    if let Some(value) = node.child_by_field_name("value") {
+                        extract_uses(value, source, block_id, node_counter, uses);
+                    }
+                }
+                "assignment_expression" | "assignment" => {
+                    if let Some(left) = node.child_by_field_name("left") {
+                        if let Some(name) = find_var_name(left, source) {
+                            definitions.push(Definition {
+                                name,
+                                block_id,
+                                node: *node_counter,
+                                start_byte: left.start_byte(),
+                                end_byte: left.end_byte(),
+                            });
+                            *node_counter += 1;
+                        }
+                    }
+                    if let Some(right) = node.child_by_field_name("right") {
+                        extract_uses(right, source, block_id, node_counter, uses);
+                    }
+                }
+                "call_expression" => {
+                    if let Some(func) = node.child_by_field_name("function") {
+                        let func_name = source[func.start_byte()..func.end_byte()].to_string();
+                        uses.push(Use {
+                            name: func_name,
+                            block_id,
+                            node: *node_counter,
+                            start_byte: func.start_byte(),
+                            end_byte: func.end_byte(),
+                        });
+                        *node_counter += 1;
+                    }
+                    if let Some(args) = node.child_by_field_name("arguments") {
+                        for i in 0..args.child_count() {
+                            if let Some(arg) = args.child(i) {
+                                extract_uses(arg, source, block_id, node_counter, uses);
+                            }
+                        }
+                    }
+                }
+                "return_statement" | "return_expression" => {
+                    if let Some(value) = node.child_by_field_name("value") {
+                        extract_uses(value, source, block_id, node_counter, uses);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     let mut cursor = node.walk();
@@ -291,6 +473,7 @@ fn scan_statement_def_uses(
                 definitions,
                 uses,
                 node_counter,
+                spec,
             );
             if !cursor.goto_next_sibling() {
                 break;
@@ -334,13 +517,22 @@ fn scan_block_def_uses<'a>(
     definitions: &mut Vec<Definition>,
     uses: &mut Vec<Use>,
     node_counter: &mut usize,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
 ) {
     let mut statements = Vec::new();
     for &node in &block.nodes {
         collect_statements(node, &mut statements);
     }
     for stmt in &statements {
-        scan_statement_def_uses(*stmt, block.id, source, definitions, uses, node_counter);
+        scan_statement_def_uses(
+            *stmt,
+            block.id,
+            source,
+            definitions,
+            uses,
+            node_counter,
+            spec,
+        );
     }
 }
 
@@ -399,7 +591,11 @@ fn compute_reaching_defs(cfg: &ControlFlowGraph, chains: &mut DefUseChain) {
     }
 }
 
-pub fn compute_def_use<'a>(cfg: &ControlFlowGraph<'a>, source: &'a str) -> DefUseChain {
+pub fn compute_def_use<'a>(
+    cfg: &ControlFlowGraph<'a>,
+    source: &'a str,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) -> DefUseChain {
     let mut chains = DefUseChain::new();
     let mut node_counter = 0usize;
 
@@ -410,6 +606,7 @@ pub fn compute_def_use<'a>(cfg: &ControlFlowGraph<'a>, source: &'a str) -> DefUs
             &mut chains.definitions,
             &mut chains.uses,
             &mut node_counter,
+            spec,
         );
     }
 
@@ -434,8 +631,9 @@ pub fn compute_def_use<'a>(cfg: &ControlFlowGraph<'a>, source: &'a str) -> DefUs
 }
 
 pub fn build_def_use<'a>(root: Node<'a>, source: &'a str, ext: &str) -> DefUseChain {
+    let spec = spec_for_ext(ext);
     let cfg = crate::cfg::build_cfg(root, source, ext);
-    compute_def_use(&cfg, source)
+    compute_def_use(&cfg, source, spec)
 }
 
 #[cfg(test)]
@@ -507,4 +705,15 @@ fn reassign() {
             "should have use of x"
         );
     }
+}
+
+#[test]
+fn test_variable_declaration_js() {
+    let source = "var query = req.body.login + '1';";
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_javascript::LANGUAGE.into())
+        .unwrap();
+    let tree = parser.parse(source, None).unwrap();
+    println!("{}", tree.root_node().to_sexp());
 }

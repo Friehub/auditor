@@ -123,25 +123,61 @@ pub struct FileContext {
 impl FileContext {
     #[must_use]
     pub fn extract(file_path: &Path, content: &str) -> Self {
+        Self::extract_with_spec(file_path, content, None)
+    }
+
+    /// Like [`extract`](Self::extract) but prefers per-language context hints
+    /// from the spec when available.  Falls back to the hardcoded keyword
+    /// lists for any category not covered by the spec.
+    #[must_use]
+    pub fn extract_with_spec(
+        file_path: &Path,
+        content: &str,
+        spec: Option<&dyn frensense_lang::LanguageSpec>,
+    ) -> Self {
         let path_str = file_path.to_string_lossy().to_lowercase();
 
         let mut env = Environment::Unknown;
         let c = content.to_lowercase();
 
-        if TEST_PATH_KEYWORDS.iter().any(|k| path_str.contains(k))
-            || TEST_ENV_KEYWORDS.iter().any(|k| c.contains(k))
-        {
+        // Collect spec-provided test context hints (if any) and merge with
+        // the hardcoded list so the hardcoded keywords act as a fallback.
+        let spec_test_hints: Vec<String> = spec
+            .map(|s| {
+                s.test_context_hints()
+                    .iter()
+                    .map(|h| h.to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let test_env_match = spec_test_hints.iter().any(|k| c.contains(k))
+            || TEST_ENV_KEYWORDS.iter().any(|k| c.contains(k));
+
+        if TEST_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) || test_env_match {
             env = Environment::Test;
         } else if MOCK_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) {
             env = Environment::Mock;
         } else if CONFIG_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) {
             env = Environment::Config;
-        } else if ROUTE_PATH_KEYWORDS.iter().any(|k| path_str.contains(k))
-            || ROUTE_ENV_KEYWORDS.iter().any(|k| c.contains(k))
-        {
-            env = Environment::RouteHandler;
-        } else if UTILITY_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) {
-            env = Environment::Utility;
+        } else {
+            // Collect spec-provided route context hints (if any) and merge
+            // with the hardcoded list.
+            let spec_route_hints: Vec<String> = spec
+                .map(|s| {
+                    s.route_context_hints()
+                        .iter()
+                        .map(|h| h.to_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let route_env_match = spec_route_hints.iter().any(|k| c.contains(k))
+                || ROUTE_ENV_KEYWORDS.iter().any(|k| c.contains(k));
+
+            if ROUTE_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) || route_env_match {
+                env = Environment::RouteHandler;
+            } else if UTILITY_PATH_KEYWORDS.iter().any(|k| path_str.contains(k)) {
+                env = Environment::Utility;
+            }
         }
 
         let mut sensitivity = DataSensitivity::Unknown;

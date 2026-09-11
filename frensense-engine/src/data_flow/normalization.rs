@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+use frensense_lang::{LanguageSpec, NodeRole};
 use tree_sitter::Node;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,12 +40,9 @@ pub struct SemanticExtractor;
 
 impl SemanticExtractor {
     pub fn extract(node: Node, source: &str, ext: &str) -> Vec<SemanticOp> {
+        let spec = frensense_lang::spec_for_ext(ext);
         let mut ops = Vec::new();
-        match ext {
-            "rs" => Self::extract_rust(node, source, &mut ops),
-            "ts" | "js" | "tsx" | "jsx" => Self::extract_typescript(node, source, &mut ops),
-            _ => {}
-        }
+        Self::extract_with_spec(node, source, spec, &mut ops);
         ops
     }
 
@@ -69,21 +67,26 @@ impl SemanticExtractor {
         }
     }
 
-    /// Shared extraction logic for all supported languages.
-    ///
-    /// The AST node kinds used here (`call_expression`, `assignment_expression`,
-    /// `let_declaration`, `lexical_declaration`, `variable_declaration`) are
-    /// identical in the tree-sitter grammars for both Rust and TypeScript/JavaScript.
-    fn extract_generic(root: Node, source: &str, ops: &mut Vec<SemanticOp>) {
+    fn extract_with_spec(
+        root: Node,
+        source: &str,
+        spec: Option<&dyn LanguageSpec>,
+        ops: &mut Vec<SemanticOp>,
+    ) {
         let mut cursor = root.walk();
         loop {
             let node = cursor.node();
             let kind = node.kind();
 
-            match kind {
-                "call_expression" => {
-                    let func = node.child_by_field_name("function");
-                    let args_node = node.child_by_field_name("arguments");
+            let role = spec.map(|s| s.classify(kind)).unwrap_or(NodeRole::Other);
+
+            match role {
+                NodeRole::Call {
+                    callee_field,
+                    args_field,
+                } => {
+                    let func = node.child_by_field_name(callee_field);
+                    let args_node = node.child_by_field_name(args_field);
                     let name = func
                         .map(|f| source[f.start_byte()..f.end_byte()].to_string())
                         .unwrap_or_default();
@@ -109,26 +112,23 @@ impl SemanticExtractor {
                         range: node.into(),
                     });
                 }
-                // Rust: `let x = …`
-                "let_declaration" => {
-                    if let Some(value) = node.child_by_field_name("value") {
-                        if let Some(pattern) = node.child_by_field_name("pattern") {
+                NodeRole::Declaration {
+                    name_field,
+                    value_field,
+                } => {
+                    if let Some(value) = node.child_by_field_name(value_field) {
+                        if let Some(pattern) = node.child_by_field_name(name_field) {
                             Self::extract_bindings(pattern, source, value, ops);
                         }
                     }
                 }
-                // JS/TS: `let x = …` / `const x = …` / `var x = …`
-                "lexical_declaration" | "variable_declaration" => {
-                    if let Some(value) = node.child_by_field_name("value") {
-                        if let Some(pattern) = node.child_by_field_name("pattern") {
-                            Self::extract_bindings(pattern, source, value, ops);
-                        }
-                    }
-                }
-                "assignment_expression" => {
+                NodeRole::Assignment {
+                    lhs_field,
+                    rhs_field,
+                } => {
                     if let (Some(target), Some(value)) = (
-                        node.child_by_field_name("left"),
-                        node.child_by_field_name("right"),
+                        node.child_by_field_name(lhs_field),
+                        node.child_by_field_name(rhs_field),
                     ) {
                         let target_name =
                             source[target.start_byte()..target.end_byte()].to_string();
@@ -153,13 +153,5 @@ impl SemanticExtractor {
                 }
             }
         }
-    }
-
-    fn extract_rust(root: Node, source: &str, ops: &mut Vec<SemanticOp>) {
-        Self::extract_generic(root, source, ops);
-    }
-
-    fn extract_typescript(root: Node, source: &str, ops: &mut Vec<SemanticOp>) {
-        Self::extract_generic(root, source, ops);
     }
 }

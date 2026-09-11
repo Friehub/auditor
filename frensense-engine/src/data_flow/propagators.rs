@@ -24,6 +24,18 @@ impl PropagatorRegistry {
         registry
     }
 
+    /// Create a registry using the language spec's propagator rules.
+    /// When a spec is available, only spec-defined rules are loaded (the
+    /// hardcoded builtins are skipped). When no spec is provided, falls
+    /// back to `new()` which loads the JS/TS/Rust builtins.
+    pub fn from_spec(spec: &dyn frensense_lang::LanguageSpec) -> Self {
+        let mut registry = Self {
+            rules: FxHashMap::default(),
+        };
+        registry.load_from_spec(spec);
+        registry
+    }
+
     fn add(&mut self, name: &str, arg: Option<usize>, receiver: bool) {
         self.rules.insert(
             name.to_string(),
@@ -87,6 +99,20 @@ impl PropagatorRegistry {
         // Rust Methods
         self.add("to_string", None, true);
         self.add("clone", None, true);
+    }
+
+    pub fn load_from_spec(&mut self, spec: &dyn frensense_lang::LanguageSpec) {
+        for rule in spec.propagator_rules() {
+            self.rules.insert(
+                rule.call.to_string(),
+                PropagatorRule {
+                    name: rule.call.to_string(),
+                    tainted_arg: rule.tainted_arg,
+                    tainted_receiver: rule.tainted_receiver,
+                    taints_return: true,
+                },
+            );
+        }
     }
 
     pub fn get_rule(&self, name: &str) -> Option<&PropagatorRule> {

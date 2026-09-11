@@ -83,7 +83,7 @@ impl CrossFileTaintResolver {
     ///
     /// BFS forward from each registered source up to `PROPAGATE_MAX_DEPTH`.
     /// Call this once after all initial `register_exposed_taint` calls.
-    pub fn propagate_taint(&mut self) {
+    pub fn propagate_taint(&mut self, sanitizers: Option<&crate::data_flow::SanitizerRegistry>) {
         // exposed_taint is now keyed by "{file}:{symbol}" directly — no reconstruction needed.
         let seeds: Vec<(String, TaintOrigin)> = self
             .exposed_taint
@@ -104,6 +104,12 @@ impl CrossFileTaintResolver {
 
                 if let Some(callees) = self.call_graph.get(&current) {
                     for callee in callees {
+                        if let Some(reg) = sanitizers {
+                            let callee_name = callee.split(':').last().unwrap_or(callee.as_str());
+                            if reg.is_full_sanitizer(callee_name) {
+                                continue;
+                            }
+                        }
                         if visited.insert(callee.clone()) {
                             // Register the intermediate function as a taint source
                             // using the flat "{file}:{symbol}" key format.
@@ -270,7 +276,7 @@ mod tests {
         );
 
         // After propagation: intermediate is transitively seeded
-        resolver.propagate_taint();
+        resolver.propagate_taint(None);
         assert!(
             resolver.exposed_taint.contains_key("a.rs:intermediate"),
             "propagate_taint should register intermediate as a taint source"
@@ -314,7 +320,7 @@ mod tests {
         }
 
         resolver.register_exposed_taint("f0", "a.rs", TaintOrigin::UserInput);
-        resolver.propagate_taint();
+        resolver.propagate_taint(None);
 
         // f1-f5 should be seeded, f6 should not (depth 6 > PROPAGATE_MAX_DEPTH=5)
         for i in 1..=5 {

@@ -5,7 +5,6 @@ use crate::engine::auditor::{AuditOptions, ScanResult};
 use crate::parser::ParserRegistry;
 use crate::semantics::symbols::SymbolRegistry;
 use crate::{Advisory, FileId, Result};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 

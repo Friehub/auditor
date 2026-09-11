@@ -85,6 +85,30 @@ impl<'a> InterproceduralVerifier<'a> {
         }
     }
 
+    /// Create a verifier with a language spec for spec-aware propagator rules.
+    #[must_use]
+    pub fn with_spec(
+        source: &'a str,
+        tree: &'a tree_sitter::Tree,
+        source_sink: &'a CorpusSourceSinkRegistry,
+        spec: &dyn frensense_lang::LanguageSpec,
+    ) -> Self {
+        Self {
+            source,
+            _tree: tree,
+            registry: TaintRegistry::default(),
+            _visited: HashSet::new(),
+            max_depth: 5,
+            source_sink,
+            provider: None,
+            sanitizers: frensense_engine::data_flow::SanitizerRegistry::default_combined(),
+            propagators: frensense_engine::data_flow::propagators::PropagatorRegistry::from_spec(
+                spec,
+            ),
+            cfg: None,
+        }
+    }
+
     #[must_use]
     pub fn with_cfg(mut self, cfg: frensense_engine::cfg::ControlFlowGraph<'a>) -> Self {
         self.cfg = Some(cfg);

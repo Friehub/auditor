@@ -6,6 +6,7 @@
 //! at load time. Replaces hardcoded framework type arrays and sink lists.
 
 use crate::data_flow::TaintOrigin;
+use frensense_lang::spec_for_ext;
 use rustc_hash::FxHashMap;
 use std::path::Path;
 use tree_sitter::Node;
@@ -827,7 +828,7 @@ pub fn extract_param_info(param: tree_sitter::Node, source: &str) -> (String, St
     // Fallback: regex on full text
     if name.is_empty() || ty.is_empty() {
         let text = &source[param.start_byte()..param.end_byte()];
-        if let Some(caps) = regex::Regex::new(r"(\w+)\s*:\s*(.+)")
+        if let Some(caps) = regex::Regex::new(r"([^:]+)\s*:\s*(.+)")
             .ok()
             .and_then(|re| re.captures(text))
         {
@@ -888,7 +889,8 @@ fn extract_sources_and_sinks(source: &str, ext_hint: &str) -> (Vec<String>, Vec<
     let Some(tree) = parser.parse(source, None) else {
         return (sources, sinks);
     };
-    extract_sources_and_sinks_recursive(tree.root_node(), source, &mut sources, &mut sinks);
+    let spec = spec_for_ext(ext_hint);
+    extract_sources_and_sinks_recursive(tree.root_node(), source, &mut sources, &mut sinks, spec);
     (sources, sinks)
 }
 
@@ -897,6 +899,7 @@ fn extract_sources_and_sinks_recursive(
     source: &str,
     sources: &mut Vec<String>,
     sinks: &mut Vec<String>,
+    spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
 ) {
     let kind = node.kind();
     if kind == "pair" {
@@ -907,7 +910,11 @@ fn extract_sources_and_sinks_recursive(
             }
         }
     }
-    if kind == "call_expression" {
+    // Use spec-based classification for call nodes with fallback
+    let is_call = spec
+        .map(|s| matches!(s.classify(kind), frensense_lang::NodeRole::Call { .. }))
+        .unwrap_or_else(|| kind == "call_expression");
+    if is_call {
         if let Some(callee) = node
             .child_by_field_name("function")
             .or_else(|| node.child_by_field_name("callee"))
@@ -919,15 +926,18 @@ fn extract_sources_and_sinks_recursive(
             }
         }
     }
-    let is_fn = matches!(
-        kind,
-        "function_definition"
-            | "function_declaration"
-            | "arrow_function"
-            | "method_definition"
-            | "function_item"
-            | "function_signature_item"
-    );
+    // Use spec-based classification for function nodes with fallback
+    let is_fn = spec.map(|s| s.is_function_node(kind)).unwrap_or_else(|| {
+        matches!(
+            kind,
+            "function_definition"
+                | "function_declaration"
+                | "arrow_function"
+                | "method_definition"
+                | "function_item"
+                | "function_signature_item"
+        )
+    });
     if is_fn {
         if let Some(params) = node
             .child_by_field_name("parameters")
@@ -960,7 +970,7 @@ fn extract_sources_and_sinks_recursive(
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            extract_sources_and_sinks_recursive(cursor.node(), source, sources, sinks);
+            extract_sources_and_sinks_recursive(cursor.node(), source, sources, sinks, spec);
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -1102,5 +1112,15 @@ mod tests {
             "exec should be a sink, got: {:?}",
             registry.sink_names
         );
+    }
+}
+
+pub fn taint_source_origin(pattern: &str) -> crate::data_flow::TaintOrigin {
+    if pattern.contains("process.env") {
+        crate::data_flow::TaintOrigin::Environment
+    } else if pattern.contains("req.file") || pattern.contains("req.files") {
+        crate::data_flow::TaintOrigin::FileSystem
+    } else {
+        crate::data_flow::TaintOrigin::UserInput
     }
 }

@@ -6,24 +6,24 @@ use std::path::Path;
 use tree_sitter::Language;
 
 /// Maps file extensions to tree-sitter language names.
+/// Kept for backwards compatibility for non-spec languages like HTML/YAML.
 const LANGUAGE_EXTENSIONS: &[(&[&str], &[&str])] = &[
     (&["rust"], &["rs"]),
     (&["typescript", "ts"], &["ts", "tsx"]),
     (&["javascript", "js"], &["js", "jsx"]),
     (&["python", "py"], &["py", "pyi"]),
     (&["go"], &["go"]),
+    (&["c"], &["c", "h"]),
     (&["yaml", "yml"], &["yml", "yaml"]),
     (&["html"], &["html", "htm"]),
 ];
 
 /// Maps file extension to human-readable language name.
 pub fn ext_to_language(ext: &str) -> &'static str {
+    if let Some(spec) = frensense_lang::spec_for_ext(ext) {
+        return spec.name();
+    }
     match ext {
-        "rs" => "rust",
-        "ts" | "tsx" => "typescript",
-        "js" | "jsx" => "javascript",
-        "py" | "pyi" => "python",
-        "go" => "go",
         "yml" | "yaml" => "yaml",
         "html" | "htm" => "html",
         _ => "unknown",
@@ -33,26 +33,22 @@ pub fn ext_to_language(ext: &str) -> &'static str {
 /// Check whether a file has a supported extension.
 pub fn is_supported(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-    matches!(
-        ext,
-        "rs" | "ts"
-            | "tsx"
-            | "js"
-            | "jsx"
-            | "py"
-            | "pyi"
-            | "go"
-            | "yml"
-            | "yaml"
-            | "json"
-            | "html"
-            | "htm"
-    )
+    if frensense_lang::spec_for_ext(ext).is_some() {
+        return true;
+    }
+    matches!(ext, "yml" | "yaml" | "json" | "html" | "htm")
 }
 
 /// Look up file extensions for a language name (e.g. `rust` → `["rs"]`).
 pub fn extensions_for(name: &str) -> Option<&'static [&'static str]> {
     let lower = name.to_lowercase();
+
+    // First try the spec registry if it matches exactly
+    if let Some(spec) = frensense_lang::registry::LanguageRegistry::global().for_name(&lower) {
+        return Some(spec.extensions());
+    }
+
+    // Fallback to legacy map
     LANGUAGE_EXTENSIONS
         .iter()
         .find(|(names, _)| names.contains(&lower.as_str()))
@@ -66,47 +62,10 @@ pub fn ext_matches(ext: &str, allowed: &[&str]) -> bool {
 
 /// Tree-sitter symbol query for a file extension.
 pub fn symbol_query_for_ext(ext: &str) -> Option<&'static str> {
+    if let Some(spec) = frensense_lang::spec_for_ext(ext) {
+        return spec.symbol_query();
+    }
     match ext {
-        "rs" => Some(
-            r"
-            (function_item name: (identifier) @name)
-            (parameter pattern: (identifier) @name)
-            (parameter pattern: (tuple_pattern (identifier) @name))
-            (let_declaration pattern: (identifier) @name)
-            (let_declaration pattern: (tuple_pattern (identifier) @name))
-            (struct_item name: (type_identifier) @name)
-            (enum_item name: (type_identifier) @name)
-            (trait_item name: (type_identifier) @name)
-            (const_item name: (identifier) @name)
-        ",
-        ),
-        "ts" | "tsx" => Some(
-            r"
-            (function_declaration name: (identifier) @name)
-            (method_definition name: (property_identifier) @name)
-            (class_declaration name: (type_identifier) @name)
-            (interface_declaration name: (type_identifier) @name)
-            (enum_declaration name: (identifier) @name)
-            (variable_declarator name: (identifier) @name)
-            (lexical_declaration (variable_declarator name: (identifier) @name))
-        ",
-        ),
-        "js" | "jsx" => Some(
-            r"
-            (function_declaration name: (identifier) @name)
-            (method_definition name: (property_identifier) @name)
-            (class_declaration name: (identifier) @name)
-            (variable_declarator name: (identifier) @name)
-            (lexical_declaration (variable_declarator name: (identifier) @name))
-        ",
-        ),
-        "py" | "pyi" => Some(
-            r"
-            (function_definition name: (identifier) @name)
-            (class_definition name: (identifier) @name)
-            (assignment left: (identifier) @name)
-        ",
-        ),
         "html" | "htm" => Some(
             r"
             (element (tag_name) @name)
@@ -119,89 +78,11 @@ pub fn symbol_query_for_ext(ext: &str) -> Option<&'static str> {
 }
 
 /// Tree-sitter call query for a file extension.
-///
-/// Each match captures two names:
-///   @caller — the enclosing function / method name
-///   @call   — the callee being invoked
-///
-/// This enables `extract_edges_from_tree` to wire `caller → callee` edges
-/// in the `SemanticGraph` without a separate AST walk.
 pub fn call_query_for_ext(ext: &str) -> Option<&'static str> {
-    match ext {
-        "rs" => Some(
-            r"
-            (function_item name: (identifier) @caller
-                body: (_
-                    (call_expression function: (identifier) @call)))
-            (function_item name: (identifier) @caller
-                body: (_
-                    (call_expression function:
-                        (field_expression field: (field_identifier) @call))))
-            (function_item name: (identifier) @caller
-                body: (_
-                    (let_declaration
-                        value: (call_expression function: (identifier) @call))))
-            (function_item name: (identifier) @caller
-                body: (_
-                    (let_declaration
-                        value: (call_expression function:
-                            (field_expression field: (field_identifier) @call)))))
-        ",
-        ),
-        "ts" | "tsx" | "js" | "jsx" => Some(
-            r"
-            (function_declaration name: (identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call_expression function: (identifier) @call))))
-            (function_declaration name: (identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call_expression function:
-                            (member_expression property: (property_identifier) @call)))))
-            (method_definition name: (property_identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call_expression function: (identifier) @call))))
-            (method_definition name: (property_identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call_expression function:
-                            (member_expression property: (property_identifier) @call)))))
-            (expression_statement
-                (assignment_expression
-                    left: (member_expression
-                        property: (property_identifier) @caller)
-                    right: (arrow_function
-                        body: (statement_block
-                            (expression_statement
-                                (call_expression function: (identifier) @call))))))
-            (expression_statement
-                (assignment_expression
-                    left: (member_expression
-                        property: (property_identifier) @caller)
-                    right: (arrow_function
-                        body: (statement_block
-                            (expression_statement
-                                (call_expression function:
-                                    (member_expression property: (property_identifier) @call)))))))
-        ",
-        ),
-        "py" | "pyi" => Some(
-            r"
-            (function_definition name: (identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call function: (identifier) @call))))
-            (function_definition name: (identifier) @caller
-                body: (_
-                    (expression_statement
-                        (call function: (attribute attribute: (identifier) @call)))))
-        ",
-        ),
-        "html" | "htm" => None,
-        _ => None,
+    if let Some(spec) = frensense_lang::spec_for_ext(ext) {
+        return spec.call_query();
     }
+    None
 }
 
 pub struct ParserRegistry;
@@ -213,16 +94,11 @@ impl ParserRegistry {
             FrensenseError::Config(format!("File has no extension: {}", path.display()))
         })?;
 
+        if let Some(spec) = frensense_lang::spec_for_ext(ext) {
+            return Ok(spec.tree_sitter_language());
+        }
+
         match ext {
-            #[cfg(feature = "rust")]
-            "rs" => Ok(tree_sitter_rust::LANGUAGE.into()),
-            #[cfg(feature = "typescript")]
-            "ts" | "tsx" => Ok(tree_sitter_typescript::LANGUAGE_TSX.into()),
-            #[cfg(feature = "typescript")]
-            "js" | "jsx" => Ok(tree_sitter_javascript::LANGUAGE.into()),
-            #[cfg(feature = "python")]
-            "py" | "pyi" => Ok(tree_sitter_python::LANGUAGE.into()),
-            "go" => Ok(tree_sitter_go::LANGUAGE.into()),
             #[cfg(feature = "html")]
             "html" | "htm" => Ok(tree_sitter_html::LANGUAGE.into()),
             "yml" | "yaml" => Err(FrensenseError::Config(format!(
@@ -236,12 +112,12 @@ impl ParserRegistry {
 
     /// Returns the tree-sitter language for a language name string.
     pub fn get_language_by_name(name: &str) -> Result<Language> {
-        match name {
-            "rust" => Self::get_language(Path::new("x.rs")),
-            "typescript" | "ts" => Self::get_language(Path::new("x.tsx")),
-            "javascript" | "js" => Self::get_language(Path::new("x.js")),
-            "python" | "py" => Self::get_language(Path::new("x.py")),
-            "go" => Self::get_language(Path::new("x.go")),
+        let lower = name.to_lowercase();
+        if let Some(spec) = frensense_lang::registry::LanguageRegistry::global().for_name(&lower) {
+            return Ok(spec.tree_sitter_language());
+        }
+
+        match lower.as_str() {
             "yaml" | "yml" => Self::get_language(Path::new("x.yaml")),
             "html" => Self::get_language(Path::new("x.html")),
             _ => Err(FrensenseError::Config(format!(

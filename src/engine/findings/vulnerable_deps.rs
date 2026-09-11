@@ -8,7 +8,7 @@ use crate::{Advisory, Severity};
 pub struct VulnerableDeps;
 
 impl FindingModule for VulnerableDeps {
-    fn run(&self, snap: &FileSnapshot, ctx: &mut FindingContext<'_>) -> Vec<Advisory> {
+    fn run(&self, snap: &FileSnapshot, _ctx: &mut FindingContext<'_>) -> Vec<Advisory> {
         let mut advisories = Vec::new();
 
         // Only check package.json files

@@ -1,0 +1,56 @@
+[package]
+name = "frensense-providers"
+version = "0.6.0"
+license = "MIT"
+edition = "2024"
+description = "Compiler-backed semantic providers for Frensense"
+
+[lib]
+name = "frensense_providers"
+
+[dependencies]
+frensense-engine = { path = "../frensense-engine" }
+rustc-hash = "1.1"
+
+# Oxc (JS/TS)
+oxc_allocator = { version = "0.143", optional = true }
+oxc_ast = { version = "0.143", optional = true }
+oxc_ast_visit = { version = "0.143", optional = true }
+oxc_parser = { version = "0.143", optional = true }
+oxc_semantic = { version = "0.143", optional = true }
+oxc_resolver = { version = "11", optional = true }
+oxc_span = { version = "0.143", optional = true }
+oxc_syntax = { version = "0.143", optional = true }
+
+# Rust-Analyzer HIR (Rust)
+ra_ap_base_db = { version = "0.0.345", optional = true }
+ra_ap_hir = { version = "0.0.345", optional = true }
+ra_ap_ide_db = { version = "0.0.345", optional = true }
+ra_ap_paths = { version = "0.0.345", optional = true }
+ra_ap_project_model = { version = "0.0.345", optional = true }
+ra_ap_span = { version = "0.0.345", optional = true }
+ra_ap_syntax = { version = "0.0.345", optional = true }
+ra_ap_vfs = { version = "0.0.345", optional = true }
+
+[features]
+default = ["oxc"]
+oxc = [
+    "dep:oxc_allocator",
+    "dep:oxc_ast",
+    "dep:oxc_ast_visit",
+    "dep:oxc_parser",
+    "dep:oxc_semantic",
+    "dep:oxc_resolver",
+    "dep:oxc_span",
+    "dep:oxc_syntax",
+]
+rust-hir = [
+    "dep:ra_ap_base_db",
+    "dep:ra_ap_hir",
+    "dep:ra_ap_ide_db",
+    "dep:ra_ap_paths",
+    "dep:ra_ap_project_model",
+    "dep:ra_ap_span",
+    "dep:ra_ap_syntax",
+    "dep:ra_ap_vfs",
+]

@@ -710,12 +710,14 @@ dependencies = [
 
 [[package]]
 name = "frensense"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "criterion",
  "diff",
+ "frensense-bundler",
  "frensense-engine",
+ "frensense-providers",
  "glob",
  "pathdiff",
  "petgraph 0.6.5",
@@ -740,28 +742,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "frensense-bundler"
+version = "0.6.0"
+dependencies = [
+ "blake3",
+ "frensense-engine",
+ "frensense-frc",
+ "frensense-lang",
+ "regex",
+ "rustc-hash 1.1.0",
+ "serde",
+ "toml 0.8.23",
+ "tree-sitter",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "frensense-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bincode",
  "blake3",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_resolver",
- "oxc_semantic",
- "oxc_span",
- "oxc_syntax",
+ "frensense-frc",
+ "frensense-lang",
  "petgraph 0.6.5",
- "ra_ap_base_db",
- "ra_ap_hir",
- "ra_ap_ide_db",
- "ra_ap_paths",
- "ra_ap_project_model",
- "ra_ap_span",
- "ra_ap_syntax",
- "ra_ap_vfs",
  "rayon",
  "regex",
  "rustc-hash 1.1.0",
@@ -781,8 +785,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "frensense-frc"
+version = "0.6.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "rustc-hash 1.1.0",
+ "serde",
+]
+
+[[package]]
+name = "frensense-lang"
+version = "0.6.0"
+dependencies = [
+ "rustc-hash 1.1.0",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "frensense-providers"
+version = "0.6.0"
+dependencies = [
+ "frensense-engine",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_resolver",
+ "oxc_semantic",
+ "oxc_span",
+ "oxc_syntax",
+ "ra_ap_base_db",
+ "ra_ap_hir",
+ "ra_ap_ide_db",
+ "ra_ap_paths",
+ "ra_ap_project_model",
+ "ra_ap_span",
+ "ra_ap_syntax",
+ "ra_ap_vfs",
+ "rustc-hash 1.1.0",
+]
+
+[[package]]
 name = "frensense-runtime"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "clap",
@@ -3682,6 +3734,16 @@ dependencies = [
  "cc",
  "regex",
  "regex-syntax",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-c"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afd2b1bf1585dc2ef6d69e87d01db8adb059006649dd5f96f31aa789ee6e9c71"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

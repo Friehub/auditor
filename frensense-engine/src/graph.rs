@@ -322,6 +322,7 @@ pub fn extract_temporal_events<'a>(
     root: tree_sitter::Node<'a>,
     source: &'a str,
     file_path: &Path,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
 ) -> Vec<TemporalEvent> {
     let mut events = Vec::new();
     let mut cursor = root.walk();
@@ -331,7 +332,11 @@ pub fn extract_temporal_events<'a>(
         let node = cursor.node();
         let kind = node.kind();
 
-        if kind == "call_expression" {
+        let is_call = spec.map_or(kind == "call_expression", |s| {
+            matches!(s.classify(kind), frensense_lang::NodeRole::Call { .. })
+        });
+
+        if is_call {
             let call_text = node.utf8_text(source.as_bytes()).unwrap_or("");
             let line = node.start_position().row + 1;
             let column = node.start_position().column + 1;
@@ -350,11 +355,16 @@ pub fn extract_temporal_events<'a>(
                         }
                         // If we hit a function body / block without hitting let_declaration,
                         // this is NOT a let binding.
-                        if parent.kind() == "function_item"
-                            || parent.kind() == "function_definition"
-                            || parent.kind() == "arrow_function"
-                            || parent.kind() == "method_definition"
-                        {
+                        if spec.map_or(
+                            matches!(
+                                parent.kind(),
+                                "function_item"
+                                    | "function_definition"
+                                    | "arrow_function"
+                                    | "method_definition"
+                            ),
+                            |s| s.is_function_node(parent.kind()),
+                        ) {
                             break;
                         }
                         p = parent.parent();

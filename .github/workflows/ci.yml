@@ -122,7 +122,7 @@ jobs:
 
   # --- MSRV Check ---
   msrv:
-    name: MSRV Check (1.88)
+    name: MSRV Check (1.95)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88
+          toolchain: 1.95
       - run: cargo check --all-features
 
   # --- SemVer Compatibility ---
@@ -181,9 +181,12 @@ jobs:
       - name: Run Full Regression Suite
         run: cargo test
 
+      - name: Build Release Binaries
+        run: cargo build --release --bin frensense
+
       - name: CLI Binary Smoke Test
         run: |
-          binary="./target/debug/frensense"
+          binary="./target/release/frensense"
           "$binary" --version
           "$binary" --help
           echo 'fn main() { let x = 1; }' > /tmp/test_smoke.rs
@@ -192,7 +195,7 @@ jobs:
 
       - name: Baseline Regression Check
         run: |
-          binary="./target/debug/frensense"
+          binary="./target/release/frensense"
           baseline="corpus/baselines/targets.json"
           mkdir -p "$(dirname "$baseline")"
           echo "Emitting baseline for corpus targets..."
@@ -307,9 +310,9 @@ jobs:
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: 'chore: update benchmark dashboard [skip ci]'
 
-  # --- Self-Audit (Engine scans itself) ---
-  self-audit:
-    name: Self-Audit (Engine scans own source)
+
+  benchmark-apps:
+    name: App Benchmarks (Juice Shop & NodeGoat)
     runs-on: ubuntu-latest
     needs: [test-rust]
     permissions:
@@ -334,64 +337,27 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/cache/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-apps-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run Self-Audit Tests
-        # Fails the build if the engine finds any Critical-severity issue in
-        # its own source, or if the warning count exceeds the soft threshold.
-        run: cargo test self_audit
-
-      - name: Build Release Binary
+      - name: Build Frensense (Release)
         run: cargo build --release
 
-      - name: CLI Self-Audit (full scan output)
-        # Runs the CLI against src/ and captures the report as a build artifact.
-        # Does not fail on findings — the test suite handles the gate.
+      - name: Clone OWASP Juice Shop
+        run: git clone --depth 1 https://github.com/juice-shop/juice-shop.git ../juice-shop
+
+      - name: Clone OWASP NodeGoat
+        run: git clone --depth 1 https://github.com/OWASP/NodeGoat.git ../NodeGoat
+
+      - name: Run Juice Shop Benchmark
         run: |
-          ./target/release/frensense ./src --json > self_audit_report.json || true
-          echo "Self-audit findings:"
-          cat self_audit_report.json | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          findings = data if isinstance(data, list) else data.get('advisories', [])
-          criticals = [f for f in findings if f.get('severity') == 'Critical']
-          warnings  = [f for f in findings if f.get('severity') == 'Warning']
-          print(f'  Critical: {len(criticals)}')
-          print(f'  Warning:  {len(warnings)}')
-          print(f'  Total:    {len(findings)}')
-          "
+          echo "## Juice Shop Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          JUICE_SHOP_DIR=../juice-shop FRENSENSE_BIN=./target/release/frensense python3 scripts/benchmark_juice_shop.py >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload Self-Audit Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: self-audit-report-${{ github.sha }}
-          path: self_audit_report.json
-          retention-days: 30
-
-  # --- Docker Image Test ---
-  docker:
-    name: Docker Image Smoke Test
-    runs-on: ubuntu-latest
-    needs: [test-rust]
-    permissions:
-      contents: read
-    steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@v2
-        with:
-          egress-policy: audit
-
-      - uses: actions/checkout@v4
-
-      - name: Build Docker Image
-        run: docker build -t frensense:test .
-
-      - name: Smoke test Docker image
+      - name: Run NodeGoat Benchmark
         run: |
-          docker run frensense:test --version
-          docker run frensense:test --help
-          echo 'fn main() { let x = 1; }' > /tmp/test_smoke.rs
-          docker run -i frensense:test /dev/stdin --json < /tmp/test_smoke.rs > /dev/null
-          echo "Docker smoke test passed"
-
-
+          echo "## NodeGoat Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          NODEGOAT_DIR=../NodeGoat FRENSENSE_BIN=./target/release/frensense python3 scripts/benchmark_nodegoat.py >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

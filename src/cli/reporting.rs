@@ -262,7 +262,7 @@ pub fn deduplicate_advisories(advisories: &mut Vec<Advisory>) {
     // Remove deduplicated advisories (in reverse to preserve indices)
     for i in (0..advisories.len()).rev() {
         if !keep[i] {
-            advisories.swap_remove(i);
+            let _ = advisories.swap_remove(i);
         }
     }
 }

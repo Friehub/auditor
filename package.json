@@ -1,6 +1,6 @@
 {
   "name": "@friehub/frensense",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Frensense: Deterministic, corpus-driven security and diagnostic engine.",
   "bin": {
     "frensense": "bin/frensense.js"

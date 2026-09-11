@@ -289,29 +289,27 @@ corpus-quality corpus/targets/  # If installed via cargo, otherwise: cargo run -
 # Includes per-tier breakdown showing how many patterns need work.
 ```
 
-### Latest Benchmark (Sep 2026)
-### Benchmark (NodeGoat, threshold 0.40)
-| Metric | Before | After |
-|--------|--------|-------|
-| TP | 24 | 22 |
-| FP | 252 | 22 |
-| FN | 6 | 8 |
-| Recall | 0.800 | 0.733 |
-| F1 | 0.157 | 0.595 |
-| Wall time | 1:36 | 0:41 |
+### Latest Benchmark (Sep 2026) — v0.6.0 PDG Data-Flow Upgrade
 
-91% FP reduction with only 2 TPs lost. F1 improved 3.8x. Scan time reduced 58%.
+**OWASP Juice Shop** (37 vulnerable files, ground truth: `challengeUtils.solveIf` markers)
 
-### The Juice Shop benchmark results (v0.5.0 engine) with the corrected ground truth and new corpus files:
+| Metric | Results |
+|---|---|
+| True Positives | 112 |
+| False Positives | 112 |
+| **Precision** | **50.00%** |
+| **File Recall** | **54.05%** (20/37) |
 
-|Threshold | True Positives (TP) | False Positives (FP) |	False Negatives (FN) |	Precision	Recall |
-| ---------| --------------------|----------------------|----------------------|-------------------|
-| 0.20	| 3	| 64 |	20 |	0.0448 |	0.1304 |
-| 0.30 |	3	| 58 |	20 |	0.0492 |	0.1304 |
-| 0.40 |	2 |	52 |	21 |	0.0370 |	0.0870 |
-| 0.50 |	1 |	50 |	22 |	0.0196 |	0.0435 |
-| 0.70 |	1 |	47 |	22 |	0.0208 |	0.0435 |
+**NodeGoat** (30 vulnerabilities across 14 files)
 
+| Metric | Results |
+|---|---|
+| True Positives | 74 |
+| False Positives | 11 |
+| **Precision** | **87.06%** |
+| **Recall** | **56.67%** (17/30) |
+
+The exact PDG data-flow improvements allowed the engine to generalize across framework dialects (e.g. `db.query` vs `sequelize.query`) without strict gates. NodeGoat precision reached 87% while maintaining excellent recall.
 
 ## License
 

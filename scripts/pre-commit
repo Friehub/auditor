@@ -1,0 +1,35 @@
+#!/bin/bash
+# Frensense Pre-Commit Hook
+# Standardizes integrity checks before local commits.
+
+set -e
+
+echo "🚀 [Frensense Integrity] Starting pre-commit checks..."
+
+# 0. Replace em-dash with standard dash in staged files
+echo "🧹 Removing em-dashes from staged files..."
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(md|rs|ts|js|json|toml)$' || true)
+
+if [ -n "$STAGED_FILES" ]; then
+    for FILE in $STAGED_FILES; do
+        if grep -q "—" "$FILE"; then
+            sed -i 's/—/-/g' "$FILE"
+            git add "$FILE"
+        fi
+    done
+fi
+
+# 1. Format Check
+echo "🎨 Checking formatting..."
+cargo fmt --all -- --check
+
+# 2. Clippy Lints
+echo "🔍 Running semantic lints..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Quick Tests
+echo "🧪 Running unit tests..."
+cargo test --lib --bins
+
+echo "✅ [Frensense Integrity] All checks passed. Proceeding with commit."
+exit 0

@@ -76,7 +76,7 @@ pub fn learn_pattern(
     std::fs::write(&metadata_path, &metadata_toml).map_err(|e| e.to_string())?;
 
     // Load using the corpus loader to verify
-    let (patterns, _warnings) = frensense_engine::corpus::loader::load_corpus(output_dir)
+    let (patterns, _warnings) = frensense_bundler::loader::load_corpus(output_dir)
         .map_err(|e| format!("Failed to load corpus: {e}"))?;
 
     let positive_fps: usize = patterns.iter().map(|p| p.positives.len()).sum();

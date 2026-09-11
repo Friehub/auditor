@@ -9,32 +9,52 @@ use tree_sitter::Node;
 
 /// Extract the structural skeleton from an AST node.
 /// Returns a list of node kinds (identifiers and literals removed).
-pub fn extract_skeleton(root: Node, _source: &str) -> Vec<String> {
+pub fn extract_skeleton(
+    root: Node,
+    _source: &str,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) -> Vec<String> {
     let mut skeleton = Vec::new();
-    extract_skeleton_recursive(root, &mut skeleton);
+    extract_skeleton_recursive(root, &mut skeleton, spec);
     skeleton
 }
 
 /// Normalize node kind names so structurally equivalent constructs
 /// produce identical skeleton sequences (for↔while, if↔switch, etc.).
-fn normalize_kind(kind: &str) -> &str {
-    match kind {
-        "while_statement" | "for_statement" | "for_in_statement" | "loop_expression"
-        | "while_expression" | "for_expression" => "loop_node",
-        "if_statement"
-        | "if_expression"
-        | "switch_statement"
-        | "switch_expression"
-        | "match_expression"
-        | "match_statement"
-        | "conditional_expression" => "branch_node",
-        "catch_clause" | "catch_block" | "try_expression" | "try_statement" => "catch_node",
-        other => other,
+fn normalize_kind<'a>(kind: &'a str, spec: Option<&dyn frensense_lang::LanguageSpec>) -> &'a str {
+    if let Some(s) = spec {
+        use frensense_lang::NodeRole;
+        match s.classify(kind) {
+            NodeRole::Loop => "loop_node",
+            NodeRole::Branch => "branch_node",
+            NodeRole::Try => "try_node",
+            NodeRole::Catch => "catch_node",
+            NodeRole::Finally => "finally_node",
+            _ => kind,
+        }
+    } else {
+        match kind {
+            "while_statement" | "for_statement" | "for_in_statement" | "loop_expression"
+            | "while_expression" | "for_expression" => "loop_node",
+            "if_statement"
+            | "if_expression"
+            | "switch_statement"
+            | "switch_expression"
+            | "match_expression"
+            | "match_statement"
+            | "conditional_expression" => "branch_node",
+            "catch_clause" | "catch_block" | "try_expression" | "try_statement" => "catch_node",
+            other => other,
+        }
     }
 }
 
 /// Recursively extract node kinds, skipping identifiers and literals.
-fn extract_skeleton_recursive(node: Node, skeleton: &mut Vec<String>) {
+fn extract_skeleton_recursive(
+    node: Node,
+    skeleton: &mut Vec<String>,
+    spec: Option<&dyn frensense_lang::LanguageSpec>,
+) {
     if skeleton.len() > 256 {
         return;
     }
@@ -56,14 +76,14 @@ fn extract_skeleton_recursive(node: Node, skeleton: &mut Vec<String>) {
         }
     }
 
-    skeleton.push(normalize_kind(kind).to_string());
+    skeleton.push(normalize_kind(kind, spec).to_string());
 
     // Recurse into children
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
             let child = cursor.node();
-            extract_skeleton_recursive(child, skeleton);
+            extract_skeleton_recursive(child, skeleton, spec);
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -129,7 +149,7 @@ mod tests {
         let tree = parser.parse(source, None).unwrap();
         let root = tree.root_node();
 
-        let skeleton = extract_skeleton(root, source);
+        let skeleton = extract_skeleton(root, source, None);
         assert!(!skeleton.is_empty());
         // Should not contain "foo" or "x" (identifiers)
         assert!(!skeleton.contains(&"identifier".to_string()));

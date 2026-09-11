@@ -3,9 +3,10 @@
 use std::path::Path;
 
 use crate::cfg::build_cfg;
-use crate::cfg::def_use::DefUseChain;
 use crate::cfg::def_use::compute_def_use;
 use crate::corpus::source_sink::CorpusSourceSinkRegistry;
+use frensense_lang::spec::NodeRole;
+use frensense_lang::spec_for_ext;
 
 /// Maximum number of definition hops we trace backward before giving up.
 /// Beyond this the value is treated as unresolvable.
@@ -52,7 +53,7 @@ impl TaintConfidenceAdjuster {
         source: &str,
         file_path: &Path,
         sink_line: u32,
-        sink_content: &str,
+        _sink_content: &str,
         original_confidence: f32,
         registry: &CorpusSourceSinkRegistry,
         local_tainted_vars: Option<&[String]>,
@@ -79,13 +80,14 @@ impl TaintConfidenceAdjuster {
             return original_confidence;
         };
         let root = tree.root_node();
+        let spec = spec_for_ext(ext);
 
         let cfg = build_cfg(root, source, ext);
-        let def_use = compute_def_use(&cfg, source);
+        let def_use = compute_def_use(&cfg, source, spec_for_ext(ext));
 
         let sink_byte = find_line_byte(source, sink_line);
 
-        let var_name = extract_sink_var_from_ast(root, source, sink_byte);
+        let var_name = extract_sink_var_from_ast(root, source, sink_byte, spec);
         if var_name.is_empty() {
             println!("var_name is empty for sink_byte {}", sink_byte);
             return original_confidence;
@@ -124,6 +126,7 @@ impl TaintConfidenceAdjuster {
                 registry,
                 local_tainted_vars,
                 0,
+                spec,
             ) {
                 min_hops = Some(min_hops.map_or(hops, |m| m.min(hops)));
             }
@@ -153,6 +156,7 @@ fn trace_hops_to_source(
     registry: &CorpusSourceSinkRegistry,
     local_tainted_vars: Option<&[String]>,
     depth: usize,
+    spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
 ) -> Option<usize> {
     if depth > MAX_HOPS {
         return None;
@@ -160,7 +164,7 @@ fn trace_hops_to_source(
 
     // Check all definitions that reach this use.
     for def in def_use.defs_reaching(use_idx) {
-        if is_real_source(def, source, root, registry, local_tainted_vars) {
+        if is_real_source(def, source, root, registry, local_tainted_vars, spec) {
             return Some(depth);
         }
         // This def derives from an RHS expression referencing other variable(s)
@@ -182,6 +186,7 @@ fn trace_hops_to_source(
                     registry,
                     local_tainted_vars,
                     depth + 1,
+                    spec,
                 ) {
                     return Some(hops);
                 }
@@ -191,12 +196,20 @@ fn trace_hops_to_source(
     None
 }
 
-fn extract_sink_var_from_ast(root: tree_sitter::Node, source: &str, sink_byte: usize) -> String {
+fn extract_sink_var_from_ast(
+    root: tree_sitter::Node,
+    source: &str,
+    sink_byte: usize,
+    spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
+) -> String {
     // Find the call expression at or near sink_byte
     if let Some(call_node) = root.descendant_for_byte_range(sink_byte, sink_byte + 10) {
         let mut cur = call_node;
         loop {
-            if cur.kind() == "call_expression" {
+            let is_call = spec.map_or(false, |s| {
+                matches!(s.classify(cur.kind()), NodeRole::Call { .. })
+            }) || cur.kind() == "call_expression";
+            if is_call {
                 // Get the first argument
                 if let Some(args) = cur.child_by_field_name("arguments") {
                     let mut c = args.walk();
@@ -250,6 +263,7 @@ fn is_real_source(
     root: tree_sitter::Node,
     registry: &CorpusSourceSinkRegistry,
     local_tainted_vars: Option<&[String]>,
+    spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
 ) -> bool {
     let mut start = def.start_byte.saturating_sub(SOURCE_CONTEXT_PREFIX_BYTES);
     while start > 0 && !source.is_char_boundary(start) {
@@ -271,7 +285,7 @@ fn is_real_source(
         }
     }
 
-    if let Some(type_name) = resolve_declared_type(def, root, source) {
+    if let Some(type_name) = resolve_declared_type(def, root, source, spec) {
         return registry.is_source_type(&type_name);
     }
 
@@ -282,6 +296,7 @@ fn resolve_declared_type(
     def: &crate::cfg::def_use::Definition,
     root: tree_sitter::Node,
     source: &str,
+    spec: Option<&dyn frensense_lang::spec::LanguageSpec>,
 ) -> Option<String> {
     let node = root.descendant_for_byte_range(def.start_byte, def.end_byte)?;
 
@@ -320,11 +335,18 @@ fn resolve_declared_type(
                 }
             }
             "assignment_expression" | "assignment" | "expression_statement" => break,
-            "function_definition"
-            | "function_declaration"
-            | "arrow_function"
-            | "method_definition"
-            | "function_item" => break,
+            kind if spec.map_or(false, |s| s.is_function_node(kind))
+                || matches!(
+                    kind,
+                    "function_definition"
+                        | "function_declaration"
+                        | "arrow_function"
+                        | "method_definition"
+                        | "function_item"
+                ) =>
+            {
+                break;
+            }
             _ => {}
         }
         if let Some(parent) = current.parent() {

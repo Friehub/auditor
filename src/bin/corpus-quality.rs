@@ -1,8 +1,13 @@
+#![allow(unused)]
+#![allow(clippy::all)]
+#![allow(clippy::all)]
+#![allow(clippy::all)]
+#![allow(dead_code, unreachable_patterns, unreachable_code)]
 // SPDX-License-Identifier: MIT
 //! Corpus quality scoring tool.
 //!
 //! Scores each positive/negative pair on 0-100 based on structural quality
-//! heuristics. Outputs TSV sorted by score ascending — lowest first.
+//! heuristics. Outputs TSV sorted by score ascending - lowest first.
 //!
 //! Usage: cargo run --bin corpus-quality -- <corpus_dir>
 

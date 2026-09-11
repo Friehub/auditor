@@ -12,7 +12,7 @@ pub const DEFAULT_BANDS: usize = 40;
 
 /// Rows per LSH band. More rows = tighter threshold (fewer candidates).
 /// Threshold = (1/bands)^(1/rows_per_band) = (1/40)^(1/12) ≈ 0.71.
-pub const DEFAULT_ROWS_PER_BAND: usize = 12;
+pub const DEFAULT_ROWS_PER_BAND: usize = 3;
 
 /// Compute a single MinHash row hash using a universal multiply-shift hash family.
 ///

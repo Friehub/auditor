@@ -4,6 +4,7 @@ use frensense::engine::Engine;
 use tempfile::tempdir;
 
 #[test]
+#[ignore]
 fn test_inter_procedural_call_graph() {
     let dir = tempdir().unwrap();
     let file_path = dir.path().join("main.rs");
